@@ -12,6 +12,8 @@ const state = {
   liveLinearTasks: [],
   sidebarOpen: false,
   analytics: null,
+  logNearBottom: true, // whether the log feed should auto-follow new events
+  toolOverrides: new Map(), // toolUseId -> explicit user expand/collapse choice
 };
 
 let eventSource = null;
@@ -38,6 +40,34 @@ function formatTime(iso) {
   return iso ? new Date(iso).toLocaleString() : "";
 }
 
+function formatClock(iso) {
+  return iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+}
+
+function capitalize(s) {
+  return s ? s[0].toUpperCase() + s.slice(1) : s;
+}
+
+function prettyJson(value) {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+// Agent text is markdown (Claude formats its responses that way). marked
+// renders it to HTML; DOMPurify sanitizes it before it ever touches
+// innerHTML, since tool results can carry arbitrary web/file content that
+// later gets quoted back in an agent's own reply.
+function renderMarkdown(text) {
+  if (!text) return "";
+  if (window.marked && window.DOMPurify) {
+    return window.DOMPurify.sanitize(window.marked.parse(text, { breaks: true }));
+  }
+  return escapeHtml(text).replace(/\n/g, "<br>");
+}
+
 async function fetchJSON(url, opts) {
   const res = await fetch(url, opts);
   if (!res.ok) throw new Error(`${url} -> ${res.status}`);
@@ -52,6 +82,15 @@ function departmentMeta(key) {
 function deptColor(key) {
   const meta = departmentMeta(key);
   return meta ? meta.color[state.theme] : null;
+}
+
+function sourceLabel(source) {
+  if (source === "ceo") return "CEO";
+  return departmentMeta(source)?.label ?? capitalize(source);
+}
+
+function avatarInitial(source) {
+  return (sourceLabel(source) || "?").slice(0, 1).toUpperCase();
 }
 
 // ---------- Theme ----------
@@ -137,6 +176,8 @@ async function selectRun(id) {
   }
   state.selectedRunId = id;
   state.sidebarOpen = false;
+  state.logNearBottom = true;
+  state.toolOverrides = new Map();
   const run = await fetchJSON(`/api/runs/${id}`);
   state.selectedRun = run;
   state.liveLinearTasks = [...run.linearTasks];
@@ -230,6 +271,17 @@ function closeSidebar() {
 
 function render() {
   const app = document.getElementById("app");
+
+  // render() fully replaces #app's markup on every SSE event, which would
+  // otherwise reset .log's scroll to the top each time. Capture whether the
+  // reader was following the bottom (or had scrolled up to read history)
+  // before the swap, then restore it after.
+  const prevLog = app.querySelector(".log");
+  const wasNearBottom = prevLog
+    ? prevLog.scrollHeight - prevLog.scrollTop - prevLog.clientHeight < 48
+    : true;
+  const prevScrollTop = prevLog?.scrollTop ?? 0;
+
   const showSidebar = state.view.type !== "accounts";
   app.innerHTML = `
     ${renderNav()}
@@ -238,10 +290,22 @@ function render() {
       ${showSidebar ? renderSidebar() : ""}
       <main class="main">${renderMain()}</main>
     </div>
+    <div id="nav-tooltip"></div>
   `;
   attachHandlers();
   if (window.lucide) window.lucide.createIcons();
   initCharts();
+
+  const newLog = app.querySelector(".log");
+  if (newLog) {
+    if (wasNearBottom) {
+      newLog.scrollTop = newLog.scrollHeight;
+      state.logNearBottom = true;
+    } else {
+      newLog.scrollTop = prevScrollTop;
+      updateJumpButton(newLog);
+    }
+  }
 }
 
 // ---------- Charts ----------
@@ -514,7 +578,7 @@ function renderRunDetail() {
       <div class="panels">
         <section class="panel log-panel">
           <h3>Log</h3>
-          <div class="log">${renderLog(run.events)}</div>
+          <div class="log">${renderLog(run.events, run.status)}</div>
         </section>
 
         <section class="panel side-panels">
@@ -536,26 +600,122 @@ function renderRunDetail() {
   `;
 }
 
-function renderLog(events) {
-  return (
-    events
-      .map((event) => {
-        if (event.type === "text") {
-          return `<div class="log-line agent-text"><span class="tag">${escapeHtml(event.source)}</span>${escapeHtml(event.text)}</div>`;
+// A "tool_use" and its matching "tool_result" (joined by toolUseId) render as
+// one collapsible card rather than two disconnected log lines — the reader
+// cares about the call and its outcome together, not as a sequence.
+function renderLog(events, status) {
+  const resultsByToolUseId = new Map();
+  for (const event of events) {
+    if (event.type === "tool_result") resultsByToolUseId.set(event.toolUseId, event);
+  }
+
+  const parts = [];
+  for (const event of events) {
+    if (event.type === "tool_result") continue; // rendered inline with its tool_use
+    if (event.type === "text") parts.push(renderTextMessage(event));
+    else if (event.type === "tool_use") parts.push(renderToolCard(event, resultsByToolUseId.get(event.toolUseId)));
+    else if (event.type === "done") parts.push(renderTurnDivider(event));
+  }
+
+  const body = parts.join("");
+  if (!body) {
+    return status === "running"
+      ? `<div class="tasks-empty">Waiting for the agent…</div>${renderTypingIndicator(events)}`
+      : '<div class="tasks-empty">No activity.</div>';
+  }
+  return body + (status === "running" ? renderTypingIndicator(events) : "");
+}
+
+function renderTextMessage(event) {
+  const color = deptColor(event.source) || "var(--accent)";
+  return `
+    <div class="msg">
+      <span class="msg-avatar" style="background:${color}">${escapeHtml(avatarInitial(event.source))}</span>
+      <div class="msg-body">
+        <div class="msg-head">
+          <span class="msg-source">${escapeHtml(sourceLabel(event.source))}</span>
+          <span class="msg-time">${formatClock(event.ts)}</span>
+        </div>
+        <div class="msg-text">${renderMarkdown(event.text)}</div>
+      </div>
+    </div>
+  `;
+}
+
+function isToolCardOpen(toolUseId, isError) {
+  return state.toolOverrides.has(toolUseId) ? state.toolOverrides.get(toolUseId) : isError;
+}
+
+function renderToolCard(event, result) {
+  const color = deptColor(event.source) || "var(--accent)";
+  const pending = !result;
+  const isError = !!result?.isError;
+  const statusClass = pending ? "pending" : isError ? "error" : "success";
+  const statusIcon = pending ? "loader-circle" : isError ? "x-circle" : "check-circle-2";
+  const open = isToolCardOpen(event.toolUseId, isError);
+
+  return `
+    <div class="tool-card ${statusClass}${open ? " open" : ""}">
+      <button type="button" class="tool-card-head" data-toggle-tool="${event.toolUseId}">
+        <span class="msg-avatar" style="background:${color}">${escapeHtml(avatarInitial(event.source))}</span>
+        <span class="tool-icon"><i data-lucide="wrench"></i></span>
+        <span class="tool-name">${escapeHtml(event.name)}</span>
+        <span class="tool-status ${statusClass}"><i data-lucide="${statusIcon}"></i></span>
+        <span class="tool-chevron"><i data-lucide="chevron-down"></i></span>
+      </button>
+      <div class="tool-card-body">
+        <div class="tool-block">
+          <span class="tool-block-label">Input</span>
+          <pre>${escapeHtml(prettyJson(event.input))}</pre>
+        </div>
+        ${
+          result
+            ? `<div class="tool-block">
+                <span class="tool-block-label">${isError ? "Error" : "Result"}</span>
+                <pre>${escapeHtml(result.text)}</pre>
+              </div>`
+            : `<div class="tool-block pending-note">Waiting for result…</div>`
         }
-        if (event.type === "tool_use") {
-          return `<div class="log-line tool_use"><span class="tag">${escapeHtml(event.source)}</span>→ ${escapeHtml(event.name)}(${escapeHtml(JSON.stringify(event.input))})</div>`;
-        }
-        if (event.type === "tool_result") {
-          return `<div class="log-line tool_result${event.isError ? " error" : ""}">${escapeHtml(event.text)}</div>`;
-        }
-        if (event.type === "done") {
-          return `<div class="log-line turn-end">(turn ended — cost so far: $${event.costUsd.toFixed(4)})</div>`;
-        }
-        return "";
-      })
-      .join("") || '<div class="tasks-empty">Waiting for the agent…</div>'
-  );
+      </div>
+    </div>
+  `;
+}
+
+function renderTurnDivider(event) {
+  const label = event.status === "error" ? "Turn failed" : "Turn complete";
+  return `<div class="turn-divider ${event.status}"><span>${escapeHtml(label)} · $${event.costUsd.toFixed(4)} · ${formatClock(event.ts)}</span></div>`;
+}
+
+function renderTypingIndicator(events) {
+  const lastSourced = [...events].reverse().find((e) => "source" in e);
+  const color = (lastSourced && deptColor(lastSourced.source)) || "var(--accent)";
+  return `<div class="typing-indicator" style="--dot-color:${color}"><span></span><span></span><span></span></div>`;
+}
+
+function renderJumpButton() {
+  return `<button type="button" class="log-jump-btn" id="log-jump"><i data-lucide="arrow-down"></i>New activity</button>`;
+}
+
+// Called both from the delegated scroll listener (live, no re-render) and
+// from render() right after a DOM rebuild, so the pill's presence stays
+// correct whether the reader is actively scrolling or a new SSE event just
+// redrew the whole log underneath them.
+function updateJumpButton(log) {
+  const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 48;
+  state.logNearBottom = nearBottom;
+  const existing = document.getElementById("log-jump");
+  if (nearBottom) {
+    existing?.remove();
+    return;
+  }
+  if (!existing && state.selectedRun?.status === "running") {
+    log.insertAdjacentHTML("beforeend", renderJumpButton());
+    document.getElementById("log-jump")?.addEventListener("click", () => {
+      log.scrollTop = log.scrollHeight;
+      updateJumpButton(log);
+    });
+    if (window.lucide) window.lucide.createIcons();
+  }
 }
 
 function renderLinearTasks(tasks) {
@@ -666,10 +826,69 @@ async function openDocument(id) {
   );
 }
 
+// ---------- Nav tooltip ----------
+//
+// Delegated on `document` (not inside #app) so it survives every render()
+// wiping and rebuilding the DOM — attaching this inside attachHandlers()
+// would mean re-binding it on every single render for no benefit, since
+// nothing here depends on the current view state.
+function initNavTooltip() {
+  const hoverCapable = window.matchMedia?.("(hover: hover)").matches;
+  if (!hoverCapable) return; // touch devices: no hover, nothing to wire up
+
+  const tooltip = () => document.getElementById("nav-tooltip");
+
+  document.addEventListener("mouseover", (e) => {
+    const icon = e.target.closest?.(".nav-icon");
+    const el = tooltip();
+    if (!icon || !el) return;
+    const rect = icon.getBoundingClientRect();
+    el.textContent = icon.dataset.label ?? "";
+    el.style.left = `${rect.left + rect.width / 2}px`;
+    el.style.top = `${rect.bottom + 10}px`;
+    el.classList.add("visible");
+  });
+
+  document.addEventListener("mouseout", (e) => {
+    if (!e.target.closest?.(".nav-icon")) return;
+    tooltip()?.classList.remove("visible");
+  });
+}
+
+// ---------- Log interactions ----------
+//
+// Delegated on `document`, same reasoning as initNavTooltip: .log and its
+// tool-cards are recreated on every render(), so binding here once avoids
+// rebinding on every SSE event for no benefit.
+function initLogInteractions() {
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest?.("[data-toggle-tool]");
+    if (!btn) return;
+    const card = btn.closest(".tool-card");
+    if (!card) return;
+    const nowOpen = !card.classList.contains("open");
+    state.toolOverrides.set(btn.dataset.toggleTool, nowOpen);
+    card.classList.toggle("open", nowOpen);
+  });
+
+  // scroll doesn't bubble in every engine — capture phase catches it
+  // regardless, without needing a listener on the (recreated) .log itself.
+  document.addEventListener(
+    "scroll",
+    (e) => {
+      const log = e.target.closest?.(".log");
+      if (log) updateJumpButton(log);
+    },
+    true,
+  );
+}
+
 // ---------- Init ----------
 
 async function init() {
   initTheme();
+  initNavTooltip();
+  initLogInteractions();
   await Promise.all([loadDepartments(), loadAccounts()]);
   await Promise.all([loadRunsForCurrentView(), loadAnalytics()]);
   render();

@@ -23,14 +23,16 @@
   --error: #d03b3b;
 
   --nav-h: 52px;
-  --sidebar-w: 280px;
-  --radius: 10px;
-  --radius-sm: 7px;
+  --sidebar-w: 272px;
+  --radius: 14px;
+  --radius-sm: 10px;
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
   --space-5: 20px;
+  --space-6: 32px;
+  --content-max: 1360px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -70,6 +72,11 @@ html, body {
   background: var(--bg);
   color: var(--text);
   -webkit-tap-highlight-color: transparent;
+  /* Safety net — the real fix is `min-width: 0` on the grid items below
+   * (canvas elements are replaced elements with a large intrinsic width,
+   * and CSS Grid/Flex items default to min-width: auto, so a chart could
+   * force its track — and the whole page — wider than the viewport). */
+  overflow-x: hidden;
 }
 
 button, input, textarea {
@@ -80,6 +87,37 @@ button, input, textarea {
   display: flex;
   flex-direction: column;
   height: 100dvh;
+}
+
+/* Floating shell: on tablet/desktop, the whole app — topnav, sidebar, and
+ * main together — sits inset from the browser edges as one rounded panel,
+ * rather than only padding the content inside .main. body's own background
+ * (the page plane) shows through the gap. Skipped below 720px: the mobile
+ * sidebar is a fixed-position overlay drawer that intentionally breaks out
+ * to the true viewport edges, so an inset/clipped shell doesn't apply there. */
+@media (min-width: 720px) {
+  html, body {
+    overflow: hidden; /* the shell owns its own scrolling (.main), not the page */
+  }
+
+  #app {
+    margin: var(--space-5);
+    height: calc(100dvh - var(--space-5) * 2);
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden; /* clips topnav/sidebar/main corners to the rounded shell */
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.08);
+  }
+}
+
+/* Wide monitors: give the floating shell more breathing room too, matching
+ * the .main wide-monitor gutter bump below. */
+@media (min-width: 1500px) {
+  #app {
+    margin: var(--space-6);
+    height: calc(100dvh - var(--space-6) * 2);
+  }
 }
 
 /* ============ Top nav ============ */
@@ -139,25 +177,6 @@ button, input, textarea {
   color: white;
 }
 
-.nav-icon::after {
-  content: attr(data-label);
-  position: absolute;
-  top: 48px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: var(--text);
-  color: var(--bg);
-  font-size: 11px;
-  font-weight: 600;
-  padding: 4px 8px;
-  border-radius: 6px;
-  white-space: nowrap;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.12s ease;
-  z-index: 30;
-}
-
 /* Hover styling only for real pointers — on touch devices, :hover can stick
    after a tap (no pointerleave event) and leave a highlighted button behind
    until the user taps elsewhere. */
@@ -166,10 +185,36 @@ button, input, textarea {
     background: var(--accent-soft);
     color: var(--accent);
   }
+}
 
-  .nav-icon:hover::after {
-    opacity: 1;
-  }
+/*
+ * Nav tooltip: a single shared element, JS-positioned via getBoundingClientRect
+ * (see app.js), NOT a per-icon ::after. A per-icon absolutely-positioned
+ * pseudo-element got silently clipped: .nav-scroll needs overflow-x:auto for
+ * the horizontal icon strip on narrow screens, and per the CSS Overflow spec,
+ * setting one axis to a non-visible value forces the OTHER axis to compute as
+ * "auto" too (never "visible") — so overflow-y became a clipping box exactly
+ * the height of the icons, hiding anything (like a tooltip) meant to overflow
+ * below it. position:fixed on a single external element sidesteps that
+ * entirely. Confirmed the old approach was actually invisible (not just
+ * low-contrast) via elementsFromPoint before switching.
+ */
+#nav-tooltip {
+  position: fixed;
+  background: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+  transform: translateX(-50%);
+  z-index: 50;
+}
+
+#nav-tooltip.visible {
+  opacity: 1;
 }
 
 .nav-divider {
@@ -414,6 +459,16 @@ button:disabled {
   padding: var(--space-3);
 }
 
+/* Every direct content view gets the same centered, capped-width treatment —
+ * on an ultra-wide monitor this is what keeps stat tiles and charts from
+ * stretching into uncomfortably large, sparse cards. */
+.dashboard,
+.run-detail,
+.accounts-view {
+  max-width: var(--content-max);
+  margin: 0 auto;
+}
+
 .empty-state {
   color: var(--text-muted);
   margin-top: var(--space-5);
@@ -433,14 +488,15 @@ button:disabled {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: var(--space-2);
-  margin: var(--space-3) 0;
+  margin: var(--space-2) 0 var(--space-3);
 }
 
 .stat-tile {
+  min-width: 0;
   background: var(--bg-alt);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: var(--space-3);
+  padding: 10px var(--space-3);
 }
 
 .stat-icon {
@@ -473,6 +529,7 @@ button:disabled {
 }
 
 .chart-panel {
+  min-width: 0;
   background: var(--bg-alt);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -481,7 +538,12 @@ button:disabled {
 
 .chart-wrap {
   position: relative;
-  height: 220px;
+  min-width: 0;
+  height: 200px;
+}
+
+.chart-wrap canvas {
+  max-width: 100%;
 }
 
 /* ============ Run detail ============ */
@@ -548,32 +610,276 @@ button:disabled {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: var(--space-3);
-  font-family: ui-monospace, "SF Mono", Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.55;
+  font-size: 13px;
+  line-height: 1.5;
   height: 46vh;
   overflow-y: auto;
-  white-space: pre-wrap;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* ---- chat message (agent text) ---- */
+
+.msg {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+
+.msg-avatar {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.msg-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.msg-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
+.msg-source {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.msg-time {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.msg-text {
+  font-size: 13px;
+  color: var(--text);
   word-break: break-word;
 }
 
-.log-line {
-  margin-bottom: 5px;
+.msg-text > *:first-child { margin-top: 0; }
+.msg-text > *:last-child { margin-bottom: 0; }
+.msg-text p { margin: 0 0 6px; }
+.msg-text ul,
+.msg-text ol { margin: 0 0 6px; padding-left: 1.2em; }
+.msg-text li { margin-bottom: 2px; }
+.msg-text strong { font-weight: 700; }
+.msg-text a { color: var(--accent); }
+
+.msg-text code {
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 1px 4px;
+  border-radius: 4px;
 }
 
-.log-line .tag {
-  display: inline-block;
-  min-width: 62px;
-  font-weight: 700;
-  margin-right: 6px;
-  color: var(--accent);
-  text-transform: capitalize;
+.msg-text pre {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+  overflow-x: auto;
+  margin: 0 0 6px;
 }
 
-.log-line.tool_use { color: var(--text-muted); }
-.log-line.tool_result { color: var(--text-muted); padding-left: 68px; }
-.log-line.tool_result.error { color: var(--error); }
-.log-line.turn-end { color: var(--text-muted); font-size: 10.5px; font-style: italic; opacity: 0.7; }
+.msg-text pre code {
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.msg-text blockquote {
+  margin: 0 0 6px;
+  padding-left: 8px;
+  border-left: 2px solid var(--border);
+  color: var(--text-muted);
+}
+
+/* ---- tool call card ---- */
+
+.tool-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.tool-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px var(--space-2);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  color: var(--text-muted);
+  text-align: left;
+}
+
+.tool-icon svg { width: 13px; height: 13px; opacity: 0.7; flex-shrink: 0; }
+
+.tool-name {
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 12px;
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-status svg { width: 14px; height: 14px; display: block; }
+.tool-status.success { color: var(--success); }
+.tool-status.error { color: var(--error); }
+.tool-status.pending svg { animation: tool-spin 1s linear infinite; color: var(--text-faint); }
+
+.tool-chevron svg {
+  width: 13px;
+  height: 13px;
+  color: var(--text-faint);
+  transition: transform 0.15s ease;
+}
+
+.tool-card.open .tool-chevron svg { transform: rotate(180deg); }
+
+.tool-card-body {
+  display: none;
+  border-top: 1px solid var(--border);
+  padding: var(--space-2);
+}
+
+.tool-card.open .tool-card-body { display: block; }
+
+.tool-block + .tool-block { margin-top: var(--space-2); }
+
+.tool-block-label {
+  display: block;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+  margin-bottom: 3px;
+}
+
+.tool-block pre {
+  margin: 0;
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-muted);
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.tool-card.error .tool-block:last-child pre { color: var(--error); }
+
+.pending-note {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+/* ---- turn divider ---- */
+
+.turn-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
+.turn-divider::before,
+.turn-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.turn-divider.error { color: var(--error); }
+.turn-divider.error::before,
+.turn-divider.error::after { background: color-mix(in srgb, var(--error) 35%, var(--border)); }
+
+/* ---- typing indicator ---- */
+
+.typing-indicator {
+  display: flex;
+  gap: 4px;
+  padding: 4px 0 4px 30px;
+}
+
+.typing-indicator span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dot-color, var(--accent));
+  animation: typing-bounce 1.1s ease-in-out infinite;
+  opacity: 0.5;
+}
+
+.typing-indicator span:nth-child(2) { animation-delay: 0.15s; }
+.typing-indicator span:nth-child(3) { animation-delay: 0.3s; }
+
+/* ---- jump-to-latest pill ---- */
+
+.log-jump-btn {
+  position: sticky;
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: 5px;
+  margin: 0 auto;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  z-index: 2;
+}
+
+.log-jump-btn svg { width: 13px; height: 13px; }
+
+@keyframes tool-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes typing-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .typing-indicator span { animation: none; opacity: 0.8; }
+  .tool-status.pending svg { animation: none; }
+}
 
 .tasks-list {
   list-style: none;
@@ -693,7 +999,7 @@ button:disabled {
   }
 
   .main {
-    padding: var(--space-4) var(--space-5);
+    padding: var(--space-5) var(--space-5) var(--space-4);
   }
 
   .run-header h2 {
@@ -729,6 +1035,16 @@ button:disabled {
   }
 
   .chart-wrap {
-    height: 260px;
+    height: 240px;
+  }
+}
+
+/* Wide monitors: a bit more side padding than the tablet/desktop baseline.
+ * The centered max-width on .dashboard/.run-detail/.accounts-view is what
+ * actually stops content from stretching edge to edge; this just keeps the
+ * gutter from looking too tight once there's real room to spare. */
+@media (min-width: 1500px) {
+  .main {
+    padding: var(--space-5) calc(var(--space-5) * 2) var(--space-4);
   }
 }
