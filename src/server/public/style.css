@@ -21,6 +21,10 @@
   --success: #0ca30c;
   --warning: #fab219;
   --error: #d03b3b;
+  /* The AI button is deliberately a fixed dark pill in both themes (see the
+   * reference this was built against), so its glow color stays fixed too
+   * rather than re-deriving per theme. */
+  --ai-glow: #3aa0ff;
 
   --nav-h: 52px;
   --sidebar-w: 272px;
@@ -338,11 +342,17 @@ button:disabled {
   cursor: default;
 }
 
-/* ============ AI buttons — animated glow border ============ */
-/* A conic gradient ring (crisp) plus a blurred duplicate (bloom), both
- * rotating behind the button's own solid fill. @property lets the browser
- * animate the gradient's angle smoothly instead of snapping between two
- * static gradients. */
+/* ============ AI button — traveling stroke + bloom ============ */
+/* A comet-shaped arc (mostly transparent, bright for ~60deg) orbits the
+ * button via an animated conic-gradient angle. Two independent layers wear
+ * it: a thin ring masked to just the border (crisp), and a larger blurred
+ * copy sitting behind the button (soft bloom). They're on SEPARATE real
+ * boxes — the bloom on the wrapper, the ring on the button itself — on
+ * purpose: a negative z-index pseudo-element always paints *above* its own
+ * host's background (CSS stacking order puts a stacking-context root's
+ * background before its negative-z children), so a same-element trick would
+ * wash color across the whole face instead of staying behind it. Two boxes
+ * with ordinary z-index (0 then 1) sidesteps that entirely. */
 
 @property --ai-angle {
   syntax: "<angle>";
@@ -350,15 +360,75 @@ button:disabled {
   inherits: false;
 }
 
+.ai-button-wrap {
+  position: relative;
+  display: inline-block;
+  --ai-angle: 0deg;
+}
+
+.ai-button-wrap::before {
+  content: "";
+  position: absolute;
+  inset: -14px;
+  border-radius: 999px;
+  z-index: 0;
+  background: conic-gradient(
+    from var(--ai-angle),
+    transparent 0deg,
+    transparent 250deg,
+    var(--dept-accent, var(--ai-glow)) 300deg,
+    #fff 328deg,
+    var(--dept-accent, var(--ai-glow)) 356deg,
+    transparent 360deg
+  );
+  filter: blur(18px);
+  opacity: 0.75;
+  animation: ai-spin 3.2s linear infinite;
+  transition: opacity 0.15s ease, inset 0.15s ease;
+  pointer-events: none;
+}
+
 .ai-button {
   position: relative;
-  z-index: 0;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  isolation: isolate;
-  --ai-angle: 0deg;
+  width: 100%;
+  border-radius: 999px;
+  background: #0b0b0d;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.ai-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: #17171a;
+  border-color: rgba(255, 255, 255, 0.18);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+
+.ai-button:active:not(:disabled) {
+  transform: translateY(0) scale(0.97);
+  background: #0b0b0d;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  transition-duration: 0.05s;
+}
+
+/* The glow brightens and quickens right along with the button's own hover
+ * lift, so the two read as one reactive object instead of a button with
+ * unrelated decoration floating behind it. */
+.ai-button-wrap:has(.ai-button:hover:not(:disabled))::before {
+  opacity: 0.95;
+  animation-duration: 2s;
+}
+
+.ai-button-wrap:has(.ai-button:active:not(:disabled))::before {
+  opacity: 0.6;
+  inset: -8px;
 }
 
 .ai-button svg {
@@ -366,32 +436,36 @@ button:disabled {
   height: 16px;
 }
 
-.ai-button::before,
-.ai-button::after {
+.ai-button::before {
   content: "";
   position: absolute;
-  inset: -2px;
-  border-radius: calc(var(--radius-sm) + 2px);
-  z-index: -1;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1.5px;
   background: conic-gradient(
     from var(--ai-angle),
-    var(--dept-accent, var(--accent)),
-    #ec4899,
-    #22d3ee,
-    var(--dept-accent, var(--accent))
+    transparent 0deg,
+    transparent 250deg,
+    var(--dept-accent, var(--ai-glow)) 300deg,
+    #fff 328deg,
+    var(--dept-accent, var(--ai-glow)) 356deg,
+    transparent 360deg
   );
-  animation: ai-spin 4s linear infinite;
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: ai-spin 3.2s linear infinite;
+  pointer-events: none;
 }
 
-.ai-button::before {
-  filter: blur(9px);
-  opacity: 0.85;
-}
-
-.ai-button:disabled::before,
-.ai-button:disabled::after {
+.ai-button-wrap:has(.ai-button:disabled)::before {
   animation-play-state: paused;
-  opacity: 0.35;
+  opacity: 0.3;
+}
+
+.ai-button:disabled::before {
+  animation-play-state: paused;
+  opacity: 0.3;
 }
 
 @keyframes ai-spin {
@@ -402,7 +476,7 @@ button:disabled {
 
 @media (prefers-reduced-motion: reduce) {
   .ai-button::before,
-  .ai-button::after {
+  .ai-button-wrap::before {
     animation: none;
   }
 }
@@ -617,6 +691,39 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+}
+
+/* ---- reply form: continues a finished run's same agent session ---- */
+
+.reply-form {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.reply-form textarea {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  max-height: 120px;
+}
+
+.reply-submit {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--dept-accent, var(--accent));
+}
+
+.reply-submit svg {
+  width: 16px;
+  height: 16px;
 }
 
 /* ---- chat message (agent text) ---- */

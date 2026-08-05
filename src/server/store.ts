@@ -22,6 +22,9 @@ export interface RunRecord {
   summary?: string;
   events: RunEvent[];
   linearTasks: LinearTaskRef[];
+  /** Claude Agent SDK session ID, once known — lets a finished run be
+   * resumed later via a reply instead of starting a fresh, context-less run. */
+  sessionId?: string;
 }
 
 const runs = new Map<string, RunRecord>();
@@ -80,17 +83,20 @@ export function appendEvent(id: string, event: RunEvent) {
 /**
  * Marks a run as truly finished — call this only after runCeoAgent's promise
  * resolves (or rejects), i.e. the whole run including any backgrounded
- * subagent work has settled. Derives final status/cost/summary from the last
- * "done" event recorded, and closes out any live SSE subscribers.
+ * subagent work has settled. Derives final status/summary from the last
+ * "done" event recorded (cost is summed across ALL "done" events, so a
+ * run that's been continued via replies reports its true total rather than
+ * just the latest turn), and closes out any live SSE subscribers.
  */
 export function finishRun(id: string) {
   const record = runs.get(id);
   if (!record) return;
-  const lastDone = [...record.events].reverse().find((e) => e.type === "done");
-  if (lastDone && lastDone.type === "done") {
+  const doneEvents = record.events.filter((e): e is Extract<RunEvent, { type: "done" }> => e.type === "done");
+  const lastDone = doneEvents[doneEvents.length - 1];
+  if (lastDone) {
     record.status = lastDone.status;
     record.finishedAt = lastDone.ts;
-    record.costUsd = lastDone.costUsd;
+    record.costUsd = doneEvents.reduce((sum, e) => sum + e.costUsd, 0);
     record.summary = lastDone.status === "success" ? lastDone.summary : lastDone.error;
   } else {
     record.status = "error";
@@ -107,6 +113,29 @@ export function setLinearTasks(id: string, tasks: LinearTaskRef[]) {
   if (!record) return;
   record.linearTasks = tasks;
   persist();
+}
+
+export function setSessionId(id: string, sessionId: string | undefined) {
+  if (!sessionId) return;
+  const record = runs.get(id);
+  if (!record) return;
+  record.sessionId = sessionId;
+  persist();
+}
+
+/**
+ * Re-opens an already-finished run so a reply can continue it in place —
+ * same run record, same id, same event log, just resumed rather than
+ * starting a fresh context-less run. Recreates the emitter finishRun tore
+ * down, so the run can stream and be finished again normally.
+ */
+export function reopenRun(id: string): boolean {
+  const record = runs.get(id);
+  if (!record) return false;
+  record.status = "running";
+  emitters.set(id, new EventEmitter().setMaxListeners(50));
+  persist();
+  return true;
 }
 
 export function getRun(id: string): RunRecord | undefined {

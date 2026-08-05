@@ -22,7 +22,9 @@ import {
   createRun,
   appendEvent,
   setLinearTasks,
+  setSessionId,
   finishRun,
+  reopenRun,
   getRun,
   listRuns,
   listRunsFor,
@@ -37,9 +39,15 @@ const app = express();
 app.use(express.json());
 app.use(express.static(join(__dirname, "public")));
 
-function startRun(record: { id: string }, run: () => Promise<{ linearTasks: LinearTaskRef[] }>) {
+function startRun(
+  record: { id: string },
+  run: () => Promise<{ linearTasks: LinearTaskRef[]; sessionId?: string }>,
+) {
   run()
-    .then((result) => setLinearTasks(record.id, result.linearTasks))
+    .then((result) => {
+      setLinearTasks(record.id, result.linearTasks);
+      setSessionId(record.id, result.sessionId);
+    })
     .catch((err) => {
       appendEvent(record.id, {
         type: "done",
@@ -83,6 +91,41 @@ app.post("/api/agents/:key/runs", (req, res) => {
   const record = createRun(goal, key);
   res.status(201).json({ id: record.id });
   startRun(record, () => runSpecialistAgent(key, goal, (event) => appendEvent(record.id, event)));
+});
+
+// --- Reply: continue a finished run's same agent conversation, instead of
+// starting a fresh one with no memory of what was already said. ---
+
+app.post("/api/runs/:id/reply", (req, res) => {
+  const record = getRun(req.params.id);
+  if (!record) {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+  if (record.status === "running") {
+    res.status(409).json({ error: "this run is still in progress" });
+    return;
+  }
+  if (!record.sessionId) {
+    res.status(409).json({ error: "this run can't be continued (no session was captured for it)" });
+    return;
+  }
+  const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
+  if (!message) {
+    res.status(400).json({ error: "message is required" });
+    return;
+  }
+
+  reopenRun(record.id);
+  res.status(202).json({ id: record.id });
+
+  const resumeSessionId = record.sessionId;
+  const agentKey = record.agentKey;
+  startRun(record, () =>
+    agentKey === "ceo"
+      ? runCeoAgent(message, (event) => appendEvent(record.id, event), resumeSessionId)
+      : runSpecialistAgent(agentKey, message, (event) => appendEvent(record.id, event), resumeSessionId),
+  );
 });
 
 app.get("/api/departments", (_req, res) => {
@@ -136,8 +179,12 @@ app.get("/api/runs/:id/stream", (req, res) => {
   };
 
   // Replay everything already recorded, so a client that connects mid-run
-  // (or after it finished) still sees the full transcript.
-  for (const event of record.events) send(event);
+  // (or after it finished) still sees the full transcript. Skipped when
+  // reconnecting after a reply (?replay=0) — the client already has that
+  // history from the original connection and only wants what's new.
+  if (req.query.replay !== "0") {
+    for (const event of record.events) send(event);
+  }
 
   if (record.status !== "running") {
     send({
@@ -146,6 +193,7 @@ app.get("/api/runs/:id/stream", (req, res) => {
       summary: record.summary,
       costUsd: record.costUsd,
       linearTasks: record.linearTasks,
+      sessionId: record.sessionId,
     });
     res.end();
     return;
@@ -161,6 +209,7 @@ app.get("/api/runs/:id/stream", (req, res) => {
         summary: finalRecord.summary,
         costUsd: finalRecord.costUsd,
         linearTasks: finalRecord.linearTasks,
+        sessionId: finalRecord.sessionId,
       });
       res.end();
     },

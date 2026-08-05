@@ -80,9 +80,14 @@ function decodeBody(payload: unknown): string {
 }
 
 function buildRawMessage(to: string, subject: string, body: string): string {
-  const message = [`To: ${to}`, `Subject: ${subject}`, "Content-Type: text/plain; charset=utf-8", "", body].join(
-    "\n",
-  );
+  const message = [
+    `To: ${to}`,
+    `Subject: ${subject}`,
+    "MIME-Version: 1.0",
+    "Content-Type: text/plain; charset=utf-8",
+    "",
+    body,
+  ].join("\n");
   return Buffer.from(message).toString("base64url");
 }
 

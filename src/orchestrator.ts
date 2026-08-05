@@ -86,14 +86,24 @@ async function drainQuery(
   stream: AsyncIterable<import("@anthropic-ai/claude-agent-sdk").SDKMessage>,
   defaultSource: RunSource,
   onEvent: (event: RunEvent) => void,
-): Promise<{ status: "success" | "error"; summary?: string; costUsd: number; linearTasks: LinearTaskRef[] }> {
+): Promise<{
+  status: "success" | "error";
+  summary?: string;
+  costUsd: number;
+  linearTasks: LinearTaskRef[];
+  sessionId?: string;
+}> {
   const linearTasks: LinearTaskRef[] = [];
   let finalCost = 0;
   let finalStatus: "success" | "error" = "success";
   let finalSummary: string | undefined;
+  let sessionId: string | undefined;
 
   for await (const message of stream) {
     const ts = new Date().toISOString();
+    if (!sessionId && "session_id" in message && typeof message.session_id === "string") {
+      sessionId = message.session_id;
+    }
 
     if (message.type === "assistant") {
       const source: RunSource = message.subagent_type ?? defaultSource;
@@ -139,11 +149,17 @@ async function drainQuery(
     }
   }
 
-  return { status: finalStatus, summary: finalSummary, costUsd: finalCost, linearTasks };
+  return { status: finalStatus, summary: finalSummary, costUsd: finalCost, linearTasks, sessionId };
 }
 
-/** Runs the CEO agent, which analyzes the goal and delegates to whichever specialists fit. */
-export async function runCeoAgent(goal: string, onEvent: (event: RunEvent) => void) {
+/**
+ * Runs the CEO agent, which analyzes the goal and delegates to whichever
+ * specialists fit. Pass `resumeSessionId` (from a prior run's returned
+ * `sessionId`) to continue that same conversation — e.g. when the CEO asked
+ * a clarifying question and the user is now answering it — rather than
+ * starting fresh with no memory of the earlier exchange.
+ */
+export async function runCeoAgent(goal: string, onEvent: (event: RunEvent) => void, resumeSessionId?: string) {
   const stream = query({
     prompt: goal,
     options: {
@@ -162,6 +178,7 @@ export async function runCeoAgent(goal: string, onEvent: (event: RunEvent) => vo
       allowedTools: allToolNames(),
       permissionMode: "dontAsk",
       maxTurns: 20,
+      ...(resumeSessionId ? { resume: resumeSessionId } : {}),
     },
   });
 
@@ -169,7 +186,12 @@ export async function runCeoAgent(goal: string, onEvent: (event: RunEvent) => vo
 }
 
 /** Runs one specialist directly (bypassing the CEO), for department-page "ask this agent" input. */
-export async function runSpecialistAgent(agentKey: string, goal: string, onEvent: (event: RunEvent) => void) {
+export async function runSpecialistAgent(
+  agentKey: string,
+  goal: string,
+  onEvent: (event: RunEvent) => void,
+  resumeSessionId?: string,
+) {
   const registry = buildAgentsRegistry();
   const agent = registry[agentKey];
   if (!agent) throw new Error(`Unknown agent: ${agentKey}`);
@@ -185,6 +207,7 @@ export async function runSpecialistAgent(agentKey: string, goal: string, onEvent
       allowedTools: agent.tools ?? [],
       permissionMode: "dontAsk",
       maxTurns: 20,
+      ...(resumeSessionId ? { resume: resumeSessionId } : {}),
     },
   });
 

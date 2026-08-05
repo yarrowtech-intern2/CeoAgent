@@ -183,7 +183,10 @@ async function selectRun(id) {
   state.liveLinearTasks = [...run.linearTasks];
   render();
 
-  eventSource = new EventSource(`/api/runs/${id}/stream`);
+  // The GET above already has every event recorded so far — replay=0 so the
+  // stream only adds what happens *after* this point instead of re-sending
+  // (and re-appending) the same history a second time.
+  eventSource = new EventSource(`/api/runs/${id}/stream?replay=0`);
   eventSource.onmessage = (msg) => handleStreamEvent(JSON.parse(msg.data));
   eventSource.onerror = () => {
     eventSource?.close();
@@ -214,6 +217,7 @@ function handleStreamEvent(event) {
     state.selectedRun.costUsd = event.costUsd;
     state.selectedRun.summary = event.summary;
     state.selectedRun.linearTasks = state.liveLinearTasks;
+    state.selectedRun.sessionId = event.sessionId ?? state.selectedRun.sessionId;
     loadRunsForCurrentView().then(render);
     loadDocumentsForCurrentView().then(render);
   }
@@ -243,6 +247,36 @@ async function submitGoal(goal) {
   await loadRunsForCurrentView();
   render();
   await selectRun(id);
+}
+
+// Continues a finished run's same agent session (via the server's resume
+// endpoint) instead of submitGoal's fresh-run path. Re-fetches the record
+// (now flipped back to "running" with the same event history) and opens a
+// new stream that skips replay — that history is already in hand, only new
+// events from here are wanted.
+async function sendReply(id, message) {
+  await fetchJSON(`/api/runs/${id}/reply`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+  });
+
+  if (eventSource) {
+    eventSource.close();
+    eventSource = null;
+  }
+  const run = await fetchJSON(`/api/runs/${id}`);
+  state.selectedRun = run;
+  state.liveLinearTasks = [...run.linearTasks];
+  state.logNearBottom = true;
+  render();
+
+  eventSource = new EventSource(`/api/runs/${id}/stream?replay=0`);
+  eventSource.onmessage = (msg) => handleStreamEvent(JSON.parse(msg.data));
+  eventSource.onerror = () => {
+    eventSource?.close();
+    eventSource = null;
+  };
 }
 
 async function disconnectAccount(key) {
@@ -474,9 +508,11 @@ function renderSidebar() {
 
       <form id="goal-form">
         <textarea id="goal-input" placeholder="${placeholder}" rows="4" required></textarea>
-        <button type="submit" id="submit-btn" class="ai-button">
-          <i data-lucide="sparkles"></i> Run
-        </button>
+        <span class="ai-button-wrap">
+          <button type="submit" id="submit-btn" class="ai-button">
+            <i data-lucide="sparkles"></i> Run
+          </button>
+        </span>
       </form>
 
       <h2>History</h2>
@@ -506,10 +542,6 @@ function renderMain() {
     return `<div class="empty-state"><p>Submit a goal to start, or pick a past run from the history.</p></div>`;
   }
   return renderRunDetail();
-}
-
-function fmtUsd(n) {
-  return `$${(n ?? 0).toFixed(2)}`;
 }
 
 function fmtDayLabel(iso) {
@@ -544,7 +576,7 @@ function renderOverviewDashboard() {
       <div class="stat-grid">
         ${statTile("activity", "Total runs", a.totals.totalRuns, "var(--accent)")}
         ${statTile("check-circle-2", "Success rate", successRate == null ? "—" : `${successRate}%`, "var(--success)")}
-        ${statTile("circle-dollar-sign", "Total cost", fmtUsd(a.totals.totalCostUsd), "var(--accent)")}
+        ${statTile("alert-triangle", "Errors", a.totals.errorRuns, a.totals.errorRuns > 0 ? "var(--error)" : "var(--text-faint)")}
         ${statTile("file-text", "Documents", a.totals.totalDocuments, "var(--accent)")}
         ${statTile("list-checks", "Linear tasks", a.totals.totalLinearTasks, "var(--accent)")}
       </div>
@@ -579,6 +611,7 @@ function renderRunDetail() {
         <section class="panel log-panel">
           <h3>Log</h3>
           <div class="log">${renderLog(run.events, run.status)}</div>
+          ${run.status !== "running" && run.sessionId ? renderReplyForm() : ""}
         </section>
 
         <section class="panel side-panels">
@@ -597,6 +630,20 @@ function renderRunDetail() {
         </section>
       </div>
     </div>
+  `;
+}
+
+// Shown once a run has finished and we captured its SDK session ID — lets
+// the same agent conversation continue (e.g. answering a clarifying
+// question it asked) instead of forcing a brand new, context-less run.
+function renderReplyForm() {
+  return `
+    <form id="reply-form" class="reply-form">
+      <textarea id="reply-input" placeholder="Reply to continue this conversation…" rows="1" required></textarea>
+      <button type="submit" id="reply-submit-btn" class="reply-submit" aria-label="Send reply">
+        <i data-lucide="corner-down-left"></i>
+      </button>
+    </form>
   `;
 }
 
@@ -811,6 +858,24 @@ function attachHandlers() {
       btn.disabled = true;
       try {
         await submitGoal(goal);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  }
+
+  const replyForm = document.getElementById("reply-form");
+  if (replyForm) {
+    replyForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const input = document.getElementById("reply-input");
+      const message = input.value.trim();
+      if (!message) return;
+      const id = state.selectedRunId;
+      const btn = document.getElementById("reply-submit-btn");
+      btn.disabled = true;
+      try {
+        await sendReply(id, message);
       } finally {
         btn.disabled = false;
       }
