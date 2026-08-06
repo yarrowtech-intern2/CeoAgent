@@ -2,6 +2,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { linearServer, LINEAR_TOOLS } from "./tools/linear.js";
 import { gmailServer, GMAIL_TOOLS, isGmailConnected } from "./tools/gmail.js";
 import { instagramServer, INSTAGRAM_TOOLS, isInstagramConnected } from "./tools/instagram.js";
+import { linkedinServer, LINKEDIN_TOOLS, isLinkedinConnected } from "./tools/linkedin.js";
 import { DEPARTMENTS, buildAgentsRegistry, documentsServer, allSpecialistToolNames } from "./agents.js";
 import { WORKSPACE_DIR } from "./workspace.js";
 
@@ -29,6 +30,7 @@ function buildMcpServers() {
     documents: documentsServer,
     ...(isGmailConnected() ? { gmail: gmailServer } : {}),
     ...(isInstagramConnected() ? { instagram: instagramServer } : {}),
+    ...(isLinkedinConnected() ? { linkedin: linkedinServer } : {}),
   };
 }
 
@@ -36,6 +38,7 @@ function allToolNames(): string[] {
   const names = new Set<string>(["Agent", ...LINEAR_TOOLS, ...allSpecialistToolNames()]);
   if (isGmailConnected()) for (const t of GMAIL_TOOLS) names.add(t);
   if (isInstagramConnected()) for (const t of INSTAGRAM_TOOLS) names.add(t);
+  if (isLinkedinConnected()) for (const t of LINKEDIN_TOOLS) names.add(t);
   return [...names];
 }
 

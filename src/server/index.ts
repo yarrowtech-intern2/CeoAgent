@@ -1,10 +1,12 @@
 import "dotenv/config";
 import express from "express";
+import multer from "multer";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCeoAgent, runSpecialistAgent, type LinearTaskRef } from "../orchestrator.js";
 import { DEPARTMENTS, buildAgentsRegistry } from "../agents.js";
 import { listDocuments, getDocument } from "../tools/documents.js";
+import { parseAttachment } from "../tools/attachments.js";
 import { getAnalytics } from "./analytics.js";
 import {
   getGmailAuthUrl,
@@ -18,6 +20,12 @@ import {
   isInstagramConnected,
   disconnectInstagram,
 } from "../tools/instagram.js";
+import {
+  getLinkedinAuthUrl,
+  handleLinkedinCallback,
+  isLinkedinConnected,
+  disconnectLinkedin,
+} from "../tools/linkedin.js";
 import {
   createRun,
   appendEvent,
@@ -36,8 +44,29 @@ const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 const AGENT_KEYS = new Set(Object.keys(buildAgentsRegistry()));
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: "256kb" }));
 app.use(express.static(join(__dirname, "public")));
+
+const upload = multer({
+  storage: multer.memoryStorage(), // parsed in-memory and discarded — never written to disk
+  limits: { fileSize: 15 * 1024 * 1024 }, // 15MB
+});
+
+// --- Uploads: extracts text from an uploaded file for the client to attach
+// to a goal, rather than the app storing it or an agent needing a file tool.
+
+app.post("/api/uploads", upload.single("file"), async (req, res) => {
+  if (!req.file) {
+    res.status(400).json({ error: "file is required" });
+    return;
+  }
+  try {
+    const { text, truncated } = await parseAttachment(req.file.buffer, req.file.originalname);
+    res.json({ filename: req.file.originalname, text, truncated });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
 
 function startRun(
   record: { id: string },
@@ -60,6 +89,30 @@ function startRun(
     .finally(() => finishRun(record.id));
 }
 
+interface AttachmentInput {
+  filename: string;
+  text: string;
+  truncated?: boolean;
+}
+
+function readAttachment(body: unknown): AttachmentInput | undefined {
+  const a = (body as { attachment?: unknown })?.attachment;
+  if (!a || typeof a !== "object") return undefined;
+  const { filename, text, truncated } = a as Record<string, unknown>;
+  if (typeof filename !== "string" || typeof text !== "string") return undefined;
+  return { filename, text, truncated: truncated === true };
+}
+
+// The goal stored on the run record (shown in the UI — history list, run
+// header) stays short; the agent gets that same text plus the attachment
+// appended, so a 50,000-character file dump never has to render as a page
+// heading.
+function buildPrompt(goal: string, attachment: AttachmentInput | undefined): string {
+  if (!attachment) return goal;
+  const note = attachment.truncated ? " (truncated)" : "";
+  return `${goal}\n\n--- Attached file: ${attachment.filename}${note} ---\n${attachment.text}\n--- end of attachment ---`;
+}
+
 // --- Runs: CEO overview (delegates to whichever specialists fit) ---
 
 app.post("/api/runs", (req, res) => {
@@ -68,10 +121,11 @@ app.post("/api/runs", (req, res) => {
     res.status(400).json({ error: "goal is required" });
     return;
   }
+  const attachment = readAttachment(req.body);
 
   const record = createRun(goal, "ceo");
   res.status(201).json({ id: record.id });
-  startRun(record, () => runCeoAgent(goal, (event) => appendEvent(record.id, event)));
+  startRun(record, () => runCeoAgent(buildPrompt(goal, attachment), (event) => appendEvent(record.id, event)));
 });
 
 // --- Runs: direct to one specialist, bypassing the CEO ---
@@ -87,10 +141,13 @@ app.post("/api/agents/:key/runs", (req, res) => {
     res.status(400).json({ error: "goal is required" });
     return;
   }
+  const attachment = readAttachment(req.body);
 
   const record = createRun(goal, key);
   res.status(201).json({ id: record.id });
-  startRun(record, () => runSpecialistAgent(key, goal, (event) => appendEvent(record.id, event)));
+  startRun(record, () =>
+    runSpecialistAgent(key, buildPrompt(goal, attachment), (event) => appendEvent(record.id, event)),
+  );
 });
 
 // --- Reply: continue a finished run's same agent conversation, instead of
@@ -240,14 +297,7 @@ app.get("/api/accounts", (_req, res) => {
   res.json([
     { key: "gmail", label: "Gmail", connected: isGmailConnected(), connectUrl: "/auth/gmail" },
     { key: "instagram", label: "Instagram", connected: isInstagramConnected(), connectUrl: "/auth/instagram" },
-    {
-      key: "linkedin",
-      label: "LinkedIn",
-      connected: false,
-      unsupported: true,
-      reason:
-        "LinkedIn has no accessible API for reading a personal account's messages, and automating one via scraping violates their Terms of Service.",
-    },
+    { key: "linkedin", label: "LinkedIn", connected: isLinkedinConnected(), connectUrl: "/auth/linkedin" },
   ]);
 });
 
@@ -297,6 +347,40 @@ app.get("/auth/instagram/callback", async (req, res) => {
 app.post("/api/accounts/instagram/disconnect", (_req, res) => {
   disconnectInstagram();
   res.status(204).end();
+});
+
+app.get("/auth/linkedin", (_req, res) => {
+  try {
+    res.redirect(getLinkedinAuthUrl());
+  } catch (err) {
+    res.status(500).send(err instanceof Error ? err.message : String(err));
+  }
+});
+
+app.get("/auth/linkedin/callback", async (req, res) => {
+  const code = typeof req.query.code === "string" ? req.query.code : "";
+  try {
+    if (!code) throw new Error("Missing authorization code");
+    await handleLinkedinCallback(code);
+    res.redirect("/?connected=linkedin");
+  } catch (err) {
+    res.status(500).send(`LinkedIn connection failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+});
+
+app.post("/api/accounts/linkedin/disconnect", (_req, res) => {
+  disconnectLinkedin();
+  res.status(204).end();
+});
+
+// Catches multer errors (oversized file, etc.) as clean JSON instead of
+// falling through to Express's default HTML error page.
+app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (err instanceof multer.MulterError) {
+    res.status(400).json({ error: err.message });
+    return;
+  }
+  next(err);
 });
 
 app.listen(PORT, () => {

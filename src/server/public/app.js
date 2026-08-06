@@ -14,13 +14,16 @@ const state = {
   analytics: null,
   logNearBottom: true, // whether the log feed should auto-follow new events
   toolOverrides: new Map(), // toolUseId -> explicit user expand/collapse choice
+  attachment: null, // { filename, text, truncated } | null — a parsed file pending on the goal form
+  attaching: false, // true while an upload is being parsed server-side
+  attachError: null, // error message from a failed upload, cleared on next attempt
 };
 
 let eventSource = null;
-const chartInstances = {};
+let lastRenderKey = null;
 
 const NAV_STATIC = {
-  overview: { key: "overview", label: "Overview", icon: "crown" },
+  overview: { key: "overview", label: "Overview", icon: "pie-chart" },
   accounts: { key: "accounts", label: "Accounts", icon: "plug-zap" },
 };
 
@@ -166,6 +169,17 @@ async function switchView(view) {
   const loaders = [loadRunsForCurrentView(), loadDocumentsForCurrentView()];
   if (view.type === "overview") loaders.push(loadAnalytics());
   await Promise.all(loaders);
+
+  // A department page with real run history but nothing selected used to
+  // just show a blank "submit a goal" prompt — auto-open the most recent
+  // run instead, so landing on e.g. Manager never looks empty when it
+  // isn't. Overview is exempt: its own "nothing selected" state is the
+  // bento dashboard, not a blank prompt, so there's nothing to fix there.
+  if (view.type === "department" && state.runs.length > 0) {
+    await selectRun(state.runs[0].id);
+    return;
+  }
+
   render();
 }
 
@@ -228,25 +242,52 @@ function handleStreamEvent(event) {
 // ---------- Actions ----------
 
 async function submitGoal(goal) {
+  // The record's own displayed goal stays exactly what was typed — the
+  // server appends the attachment's text only to what the agent receives,
+  // so a large file dump never ends up rendered as a run's heading.
+  const attachment = state.attachment ?? undefined;
   let id;
   if (state.view.type === "overview") {
     ({ id } = await fetchJSON("/api/runs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ goal }),
+      body: JSON.stringify({ goal, attachment }),
     }));
   } else if (state.view.type === "department") {
     ({ id } = await fetchJSON(`/api/agents/${state.view.key}/runs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ goal }),
+      body: JSON.stringify({ goal, attachment }),
     }));
   } else {
     return;
   }
+  state.attachment = null;
+  state.attachError = null;
   await loadRunsForCurrentView();
   render();
   await selectRun(id);
+}
+
+async function uploadAttachment(file) {
+  state.attaching = true;
+  state.attachment = null;
+  state.attachError = null;
+  render();
+
+  const formData = new FormData();
+  formData.append("file", file);
+  try {
+    const res = await fetch("/api/uploads", { method: "POST", body: formData });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data?.error ?? `Upload failed (${res.status})`);
+    state.attachment = { filename: data.filename, text: data.text, truncated: data.truncated };
+  } catch (err) {
+    state.attachError = err instanceof Error ? err.message : String(err);
+  } finally {
+    state.attaching = false;
+    render();
+  }
 }
 
 // Continues a finished run's same agent session (via the server's resume
@@ -318,17 +359,27 @@ function render() {
 
   const showSidebar = state.view.type !== "accounts";
   app.innerHTML = `
-    ${renderNav()}
     <div class="layout">
       ${showSidebar ? `<div class="sidebar-backdrop${state.sidebarOpen ? " open" : ""}" id="sidebar-backdrop"></div>` : ""}
       ${showSidebar ? renderSidebar() : ""}
-      <main class="main">${renderMain()}</main>
+      <div class="main-column">
+        ${renderNav()}
+        <main class="main">${renderMain()}</main>
+      </div>
     </div>
     <div id="nav-tooltip"></div>
   `;
   attachHandlers();
   if (window.lucide) window.lucide.createIcons();
-  initCharts();
+  initLenis();
+
+  // Only replay the entrance animation on a genuine navigation (different
+  // view/department/run), not on every SSE event during an active run —
+  // render() fires on every streamed token, and re-fading the whole panel
+  // each time would flicker rather than feel smooth.
+  const renderKey = `${state.view.type}:${state.view.key ?? ""}:${state.selectedRunId ?? ""}`;
+  animateEntrance(renderKey !== lastRenderKey);
+  lastRenderKey = renderKey;
 
   const newLog = app.querySelector(".log");
   if (newLog) {
@@ -342,102 +393,75 @@ function render() {
   }
 }
 
-// ---------- Charts ----------
+// ---------- Motion: GSAP entrance + Lenis smooth scroll ----------
 
-function cssVar(name) {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+function prefersReducedMotion() {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 }
 
-function destroyCharts() {
-  for (const key of Object.keys(chartInstances)) {
-    chartInstances[key]?.destroy();
-    delete chartInstances[key];
+// Bento cells get a staggered fade+rise whenever they're present — always,
+// not gated on viewChanged, because the Overview renders once showing a
+// "Loading analytics…" placeholder (no .bento-cell yet) and again once
+// loadAnalytics() resolves (see switchView()); the cells only actually
+// exist starting on that *second* render, which has the same view identity
+// as the first, so gating on "did the view change" would miss them
+// entirely. Safe to run unconditionally since bento cells only ever appear
+// on the Overview, which isn't re-rendered by SSE traffic.
+//
+// Every other view's root content element only fades on a genuine
+// navigation (viewChanged) — render() also fires on every SSE event while
+// a run is streaming, and re-fading the whole run-detail panel each time
+// would flicker instead of feeling smooth.
+function animateEntrance(viewChanged) {
+  if (!window.gsap || prefersReducedMotion()) return;
+  const cells = document.querySelectorAll(".bento-cell");
+  if (cells.length) {
+    gsap.fromTo(
+      cells,
+      { opacity: 0, y: 16 },
+      { opacity: 1, y: 0, duration: 0.5, ease: "power2.out", stagger: 0.06 },
+    );
+    return;
+  }
+  if (!viewChanged) return;
+  const mainChild = document.querySelector(".main")?.firstElementChild;
+  if (mainChild) {
+    gsap.fromTo(mainChild, { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.35, ease: "power2.out" });
   }
 }
 
-function initCharts() {
-  destroyCharts();
-  if (!window.Chart || !state.analytics) return;
+const lenisInstances = new Map();
+let lenisRafStarted = false;
 
-  const trendCanvas = document.getElementById("chart-trend");
-  const deptCanvas = document.getElementById("chart-department");
-  if (!trendCanvas && !deptCanvas) return;
-
-  const gridColor = cssVar("--border");
-  const mutedColor = cssVar("--text-muted");
-  const textColor = cssVar("--text");
-  // Sequential blue — the dataviz skill's default trend hue, kept distinct
-  // from --accent (brand indigo) so "brand chrome" and "data" never share a
-  // color role.
-  const trendColor = state.theme === "dark" ? "#3987e5" : "#2a78d6";
-  const trendFill = state.theme === "dark" ? "rgba(57,135,229,0.15)" : "rgba(42,120,214,0.12)";
-
-  Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
-
-  if (trendCanvas) {
-    const a = state.analytics.runsByDay;
-    chartInstances.trend = new Chart(trendCanvas, {
-      type: "line",
-      data: {
-        labels: a.map((d) => fmtDayLabel(d.date)),
-        datasets: [
-          {
-            label: "Runs",
-            data: a.map((d) => d.count),
-            borderColor: trendColor,
-            backgroundColor: trendFill,
-            fill: true,
-            tension: 0.3,
-            borderWidth: 2,
-            pointRadius: 2,
-            pointHoverRadius: 5,
-            pointBackgroundColor: trendColor,
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: {
-          x: { grid: { display: false }, ticks: { color: mutedColor, maxRotation: 0, autoSkip: true, maxTicksLimit: 7 } },
-          y: {
-            beginAtZero: true,
-            ticks: { color: mutedColor, precision: 0 },
-            grid: { color: gridColor },
-          },
-        },
-      },
-    });
+function startLenisRaf() {
+  if (lenisRafStarted) return;
+  lenisRafStarted = true;
+  function raf(time) {
+    for (const instance of lenisInstances.values()) instance.raf(time);
+    requestAnimationFrame(raf);
   }
+  requestAnimationFrame(raf);
+}
 
-  if (deptCanvas) {
-    const rows = [...state.analytics.runsByDepartment].sort((a, b) => b.count - a.count);
-    chartInstances.department = new Chart(deptCanvas, {
-      type: "bar",
-      data: {
-        labels: rows.map((d) => d.label),
-        datasets: [
-          {
-            data: rows.map((d) => d.count),
-            backgroundColor: rows.map((d) => deptColor(d.key)),
-            borderRadius: 5,
-            maxBarThickness: 28,
-          },
-        ],
-      },
-      options: {
-        indexAxis: "y",
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: {
-          x: { beginAtZero: true, ticks: { color: mutedColor, precision: 0 }, grid: { color: gridColor } },
-          y: { grid: { display: false }, ticks: { color: textColor } },
-        },
-      },
-    });
-  }
+// .main is fully recreated on every render() (the whole #app subtree is), so
+// its Lenis instance is torn down and rebuilt each time too — cheap enough
+// given Lenis is just a scroll-position interpolator. Scoped to .main only:
+// .log has its own hand-tuned scroll-preservation/jump-button logic (see
+// render()'s scroll-restore block and updateJumpButton()) built and debugged
+// earlier in this project, and Lenis's virtual scroll model risks fighting
+// that rather than complementing it — not worth the risk for a secondary
+// scroll surface.
+function initLenis() {
+  for (const instance of lenisInstances.values()) instance.destroy();
+  lenisInstances.clear();
+  if (!window.Lenis || prefersReducedMotion()) return;
+  const mainEl = document.querySelector(".main");
+  if (!mainEl || !mainEl.firstElementChild) return;
+  lenisInstances.set(
+    "main",
+    new window.Lenis({ wrapper: mainEl, content: mainEl.firstElementChild, autoRaf: false, lerp: 0.12 }),
+  );
+  startLenisRaf();
 }
 
 function navButton(key, label, icon, isActive, viewObj, accentColor) {
@@ -489,42 +513,88 @@ function renderNav() {
   `;
 }
 
+const ATTACH_ACCEPT =
+  ".xlsx,.csv,.pdf,.docx,.txt,.md,.json,.log,.yml,.yaml,.xml,.html,.css,.js,.ts,.py,.java,.c,.cpp,.cs,.go,.rb,.php,.sh,.sql";
+
+// A file is parsed to plain text server-side on upload, then carried
+// as pending state until the goal is submitted, at which point submitGoal
+// inlines it into the prompt text — no file tool, no agent-side file access
+// needed at all (see attachments.ts for why that's the deliberate choice).
+// Shown above .goal-actions only once something is attached or errored; the
+// trigger itself lives in .goal-actions as the circular "+" button.
+function renderAttachmentRow() {
+  if (state.attachment) {
+    return `
+      <div class="attachment-row">
+        <div class="attachment-chip">
+          <i data-lucide="file-text"></i>
+          <span class="attachment-name">${escapeHtml(state.attachment.filename)}</span>
+          ${
+            state.attachment.truncated
+              ? `<span class="attachment-warn" title="File was large — only the first part was attached"><i data-lucide="alert-triangle"></i></span>`
+              : ""
+          }
+          <button type="button" class="attachment-remove" id="attachment-remove" aria-label="Remove attachment">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+      </div>
+    `;
+  }
+  if (state.attachError) {
+    return `<div class="attachment-row"><span class="attachment-error">${escapeHtml(state.attachError)}</span></div>`;
+  }
+  return "";
+}
+
+function renderGoalActions() {
+  return `
+    <div class="goal-actions">
+      <button type="button" class="attach-circle" id="attach-btn" ${state.attaching ? "disabled" : ""} aria-label="Attach file">
+        <i data-lucide="${state.attaching ? "loader-circle" : "plus"}"></i>
+      </button>
+      <input type="file" id="attach-input" accept="${ATTACH_ACCEPT}" hidden />
+      <span class="ai-button-wrap">
+        <button type="submit" id="submit-btn" class="ai-button">
+          <i data-lucide="sparkles"></i> Run
+        </button>
+      </span>
+    </div>
+  `;
+}
+
 function renderSidebar() {
   const placeholder =
     state.view.type === "overview"
-      ? "Describe a goal for the CEO agent to act on…"
+      ? "Give me a task..."
       : `Ask ${escapeHtml(viewLabel())} directly…`;
   const accent = state.view.type === "department" ? deptColor(state.view.key) : null;
   const style = accent ? ` style="--dept-accent:${accent}"` : "";
 
   return `
     <aside class="sidebar${state.sidebarOpen ? " open" : ""}" id="sidebar"${style}>
-      <h1>${state.view.type === "overview" ? "CEO Agent OS" : escapeHtml(viewLabel())}</h1>
-      ${
-        state.view.type === "department"
-          ? `<p class="dept-tagline">${escapeHtml(departmentMeta(state.view.key)?.tagline ?? "")}</p>`
-          : ""
-      }
+      <h1>${state.view.type === "overview" ? "House of Musa" : escapeHtml(viewLabel())}</h1>
+      <p class="sidebar-subtitle">${state.view.type === "overview" ? "Ceo Agent" : escapeHtml(departmentMeta(state.view.key)?.tagline ?? "Department")}</p>
 
       <form id="goal-form">
         <textarea id="goal-input" placeholder="${placeholder}" rows="4" required></textarea>
-        <span class="ai-button-wrap">
-          <button type="submit" id="submit-btn" class="ai-button">
-            <i data-lucide="sparkles"></i> Run
-          </button>
-        </span>
+        ${renderAttachmentRow()}
+        ${renderGoalActions()}
       </form>
 
-      <h2>History</h2>
+      <h2>Tasks lists</h2>
       <ul class="run-list">
         ${state.runs
           .map(
             (run) => `
           <li class="run-item${run.id === state.selectedRunId ? " selected" : ""}" data-run-id="${run.id}">
-            <span class="goal-excerpt">${escapeHtml(run.goal)}</span>
-            <span class="item-meta">
-              <span class="status-badge ${run.status}">${statusLabel(run.status)}</span>
-              ${formatTime(run.createdAt)}
+            <span class="run-checkbox"></span>
+            <span class="run-item-body">
+              <span class="goal-excerpt">
+                <span class="goal-excerpt-text">${escapeHtml(run.goal)}</span>
+                <span class="status-dot ${run.status}" title="${escapeHtml(statusLabel(run.status))}"></span>
+              </span>
+              <span class="item-meta">${formatTime(run.createdAt)}</span>
             </span>
           </li>
         `,
@@ -544,16 +614,20 @@ function renderMain() {
   return renderRunDetail();
 }
 
-function fmtDayLabel(iso) {
-  return new Date(iso + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
-function statTile(icon, label, value, colorVar) {
+// A cell with a label (only the hero has one, "Overview") gets two direct
+// children — the label and the value group — so space-between (see CSS)
+// pushes them to opposite ends of the taller hero cell, top and bottom. A
+// cell with no label has just the one value-group child, which naturally
+// sits at the top instead, matching the reference's secondary cells.
+function bentoCell(colorClass, label, value, caption, subvalue) {
   return `
-    <div class="stat-tile">
-      <div class="stat-icon" style="color:${colorVar}"><i data-lucide="${icon}"></i></div>
-      <div class="stat-value">${value}</div>
-      <div class="stat-label">${escapeHtml(label)}</div>
+    <div class="bento-cell ${colorClass}">
+      ${label ? `<div class="bento-label">${escapeHtml(label)}</div>` : ""}
+      <div class="bento-value-group">
+        <div class="bento-value">${value}</div>
+        <div class="bento-caption">${escapeHtml(caption)}</div>
+        ${subvalue ? `<div class="bento-subvalue">${escapeHtml(subvalue)}</div>` : ""}
+      </div>
     </div>
   `;
 }
@@ -573,23 +647,11 @@ function renderOverviewDashboard() {
         <p class="dept-tagline">Real activity across every agent — submit a goal below, or pick a past run from the history to inspect it.</p>
       </div>
 
-      <div class="stat-grid">
-        ${statTile("activity", "Total runs", a.totals.totalRuns, "var(--accent)")}
-        ${statTile("check-circle-2", "Success rate", successRate == null ? "—" : `${successRate}%`, "var(--success)")}
-        ${statTile("alert-triangle", "Errors", a.totals.errorRuns, a.totals.errorRuns > 0 ? "var(--error)" : "var(--text-faint)")}
-        ${statTile("file-text", "Documents", a.totals.totalDocuments, "var(--accent)")}
-        ${statTile("list-checks", "Linear tasks", a.totals.totalLinearTasks, "var(--accent)")}
-      </div>
-
-      <div class="chart-grid">
-        <section class="panel chart-panel">
-          <h3>Runs — last 14 days</h3>
-          <div class="chart-wrap"><canvas id="chart-trend"></canvas></div>
-        </section>
-        <section class="panel chart-panel">
-          <h3>Runs by department</h3>
-          <div class="chart-wrap"><canvas id="chart-department"></canvas></div>
-        </section>
+      <div class="bento-grid">
+        ${bentoCell("bento-mint bento-hero", "Overview", a.totals.totalRuns, "Total runs")}
+        ${bentoCell("bento-forest", null, successRate == null ? "—" : `${successRate}%`, "Success rate")}
+        ${bentoCell("bento-orange", null, a.totals.errorRuns, "Errors")}
+        ${bentoCell("bento-lavender", null, a.totals.totalDocuments, "Documents analysed", `${a.totals.totalLinearTasks} Linear tasks`)}
       </div>
     </div>
   `;
@@ -863,6 +925,20 @@ function attachHandlers() {
       }
     });
   }
+
+  document.getElementById("attach-btn")?.addEventListener("click", () => {
+    document.getElementById("attach-input")?.click();
+  });
+
+  document.getElementById("attach-input")?.addEventListener("change", (e) => {
+    const file = e.target.files?.[0];
+    if (file) uploadAttachment(file);
+  });
+
+  document.getElementById("attachment-remove")?.addEventListener("click", () => {
+    state.attachment = null;
+    render();
+  });
 
   const replyForm = document.getElementById("reply-form");
   if (replyForm) {

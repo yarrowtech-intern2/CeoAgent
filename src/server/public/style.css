@@ -6,30 +6,50 @@
  * the media block. Status colors (--success/--warning/--error) are
  * mode-invariant by design (dataviz skill: same steps validated against
  * both surfaces) — they do not appear in the dark block below.
+ *
+ * Bento palette: --bento-mint/forest/orange/lavender are the app's 4
+ * categorical "identity" colors for the big dashboard cards — validated via
+ * the dataviz skill's palette validator for CVD pairwise separation
+ * (worst-pair ΔE well above the 15 floor in both modes) and, separately,
+ * WCAG text contrast for whichever ink sits on each card (each card's own
+ * --bento-*-ink is the contrast-checked pairing, not an arbitrary choice —
+ * forest is dark enough to need light ink; the other three need dark ink).
+ * They're deliberately their own set, distinct from --accent (generic UI:
+ * focus rings, links) and from --success/warning/error (reserved status
+ * colors) — never reused for either, per the skill's non-negotiables.
  */
 :root {
   color-scheme: light;
-  --bg: #f9f9f7;
-  --bg-alt: #f2f1ee;
-  --bg-raised: #fcfcfb;
-  --border: #e1e0d9;
-  --text: #0b0b0b;
-  --text-muted: #52514e;
-  --text-faint: #898781;
-  --accent: #4f46e5;
-  --accent-soft: #eef0fe;
-  --success: #0ca30c;
-  --warning: #fab219;
+  --bg: #ffffff;
+  --bg-alt: #bcbcbc;
+  --bg-raised: #ffffff;
+  --border: #d2d2d2;
+  --text: #303038;
+  --text-muted: #55555b;
+  --text-faint: #9a9a9a;
+  --accent: #4d7cfb;
+  --accent-soft: #e8edff;
+  --success: #09a50e;
+  --warning: #ffea00;
   --error: #d03b3b;
-  /* The AI button is deliberately a fixed dark pill in both themes (see the
-   * reference this was built against), so its glow color stays fixed too
-   * rather than re-deriving per theme. */
-  --ai-glow: #3aa0ff;
 
-  --nav-h: 52px;
-  --sidebar-w: 272px;
-  --radius: 14px;
-  --radius-sm: 10px;
+  --bento-mint: #a4dfb6;
+  --bento-mint-ink: #303038;
+  --bento-forest: #397b50;
+  --bento-forest-ink: #f7fff8;
+  --bento-orange: #ff965f;
+  --bento-orange-ink: #252631;
+  --bento-lavender: #d09bed;
+  --bento-lavender-ink: #252631;
+
+  --nav-h: 64px;
+  --sidebar-w: 244px;
+  --shell-pad-y: 22px;
+  --shell-pad-x: clamp(28px, 10vw, 120px);
+  --radius: 24px;
+  --radius-lg: 28px;
+  --radius-sm: 14px;
+  --radius-xs: 10px;
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -42,29 +62,47 @@
 @media (prefers-color-scheme: dark) {
   :root:where(:not([data-theme="light"])) {
     color-scheme: dark;
-    --bg: #0d0d0d;
-    --bg-alt: #18181a;
-    --bg-raised: #1a1a19;
-    --border: #2c2c2a;
-    --text: #ffffff;
-    --text-muted: #c3c2b7;
-    --text-faint: #898781;
-    --accent: #6366f1;
-    --accent-soft: #262650;
+    --bg: #15171b;
+    --bg-alt: #1a1c20;
+    --bg-raised: #1c1e23;
+    --border: #2a2c31;
+    --text: #f5f5f2;
+    --text-muted: #a5a49e;
+    --text-faint: #75746e;
+    --accent: #6c8cff;
+    --accent-soft: #232a4a;
+
+    --bento-mint: #4caf74;
+    --bento-mint-ink: #0e1a13;
+    --bento-forest: #227259;
+    --bento-forest-ink: #f5f5f2;
+    --bento-orange: #e0964f;
+    --bento-orange-ink: #21140a;
+    --bento-lavender: #a985d4;
+    --bento-lavender-ink: #1c1425;
   }
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #0d0d0d;
-  --bg-alt: #18181a;
-  --bg-raised: #1a1a19;
-  --border: #2c2c2a;
-  --text: #ffffff;
-  --text-muted: #c3c2b7;
-  --text-faint: #898781;
-  --accent: #6366f1;
-  --accent-soft: #262650;
+  --bg: #15171b;
+  --bg-alt: #1a1c20;
+  --bg-raised: #1c1e23;
+  --border: #2a2c31;
+  --text: #f5f5f2;
+  --text-muted: #a5a49e;
+  --text-faint: #75746e;
+  --accent: #6c8cff;
+  --accent-soft: #232a4a;
+
+  --bento-mint: #4caf74;
+  --bento-mint-ink: #0e1a13;
+  --bento-forest: #227259;
+  --bento-forest-ink: #f5f5f2;
+  --bento-orange: #e0964f;
+  --bento-orange-ink: #21140a;
+  --bento-lavender: #a985d4;
+  --bento-lavender-ink: #1c1425;
 }
 
 * { box-sizing: border-box; }
@@ -72,7 +110,7 @@
 html, body {
   margin: 0;
   height: 100%;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: "Onest", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   background: var(--bg);
   color: var(--text);
   -webkit-tap-highlight-color: transparent;
@@ -91,27 +129,25 @@ button, input, textarea {
   display: flex;
   flex-direction: column;
   height: 100dvh;
+  align-items: stretch;
 }
 
-/* Floating shell: on tablet/desktop, the whole app — topnav, sidebar, and
- * main together — sits inset from the browser edges as one rounded panel,
- * rather than only padding the content inside .main. body's own background
- * (the page plane) shows through the gap. Skipped below 720px: the mobile
- * sidebar is a fixed-position overlay drawer that intentionally breaks out
- * to the true viewport edges, so an inset/clipped shell doesn't apply there. */
+/* Floating shell: on tablet/desktop, the app sits inset from the browser
+ * edges. The sidebar spans the full height of .layout on its own — the
+ * toolbar is scoped to .main-column only (sits above .main, not above the
+ * sidebar too), matching the reference this was rebuilt against exactly:
+ * the sidebar is a plain full-height panel with no toolbar row of its own,
+ * while the main content area carries its own separate muted toolbar. */
 @media (min-width: 720px) {
   html, body {
     overflow: hidden; /* the shell owns its own scrolling (.main), not the page */
   }
 
   #app {
-    margin: var(--space-5);
-    height: calc(100dvh - var(--space-5) * 2);
-    background: var(--bg-raised);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    overflow: hidden; /* clips topnav/sidebar/main corners to the rounded shell */
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.08);
+    margin: 0;
+    height: 100dvh;
+    padding: var(--shell-pad-y) var(--shell-pad-x);
+    align-items: center;
   }
 }
 
@@ -119,12 +155,17 @@ button, input, textarea {
  * the .main wide-monitor gutter bump below. */
 @media (min-width: 1500px) {
   #app {
-    margin: var(--space-6);
-    height: calc(100dvh - var(--space-6) * 2);
+    margin: 0;
+    height: 100dvh;
+    padding-right: clamp(120px, 18vw, 260px);
+    padding-left: clamp(120px, 18vw, 260px);
   }
 }
 
 /* ============ Top nav ============ */
+/* Muted, neutral toolbar — icons stay a flat gray, no filled colored active
+ * state (the reference doesn't distinguish an "active" icon visually beyond
+ * a faint tint), scoped only above .main via .main-column. */
 
 .topnav {
   display: flex;
@@ -132,17 +173,20 @@ button, input, textarea {
   gap: var(--space-1);
   height: var(--nav-h);
   flex-shrink: 0;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-raised);
+  background: var(--bg-alt);
   padding: 0 var(--space-2);
-  position: sticky;
-  top: 0;
-  z-index: 20;
+}
+
+@media (min-width: 720px) {
+  .topnav {
+    border-bottom: 0;
+  }
 }
 
 .nav-scroll {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 2px;
   overflow-x: auto;
   scrollbar-width: none;
@@ -163,22 +207,25 @@ button, input, textarea {
   border: none;
   background: transparent;
   color: var(--text-muted);
-  border-radius: var(--radius-sm);
+  border-radius: 999px;
   cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .nav-icon svg {
   width: 22px;
   height: 22px;
-  stroke-width: 2;
+  stroke-width: 1.8;
 }
 
+/* Each button carries its own department hue via an inline --icon-accent
+ * custom property (see app.js navButton()) — Overview/Accounts omit it and
+ * fall back to the brand accent, so both the active tab and its hover state
+ * read in that department's own color, matching the Run button's glow on
+ * the same page (also var(--dept-accent, ...)). */
 .nav-icon.active {
-  /* Each button carries its own department hue via an inline --icon-accent
-   * custom property (see app.js navButton()); Overview/Accounts omit it and
-   * fall back to the brand accent. */
-  background: var(--icon-accent, var(--accent));
-  color: white;
+  background: color-mix(in srgb, var(--icon-accent, var(--accent)) 16%, transparent);
+  color: var(--icon-accent, var(--accent));
 }
 
 /* Hover styling only for real pointers — on touch devices, :hover can stick
@@ -186,8 +233,8 @@ button, input, textarea {
    until the user taps elsewhere. */
 @media (hover: hover) {
   .nav-icon:not(.active):hover {
-    background: var(--accent-soft);
-    color: var(--accent);
+    background: color-mix(in srgb, var(--icon-accent, var(--accent)) 12%, transparent);
+    color: var(--icon-accent, var(--accent));
   }
 }
 
@@ -235,16 +282,52 @@ button, input, textarea {
 
 /* ============ Layout ============ */
 
+/* Sidebar + topbar + main all merge into ONE bordered rectangle — a single
+ * outer border/background wrapping all three, with sharp (unrounded)
+ * corners throughout and plain internal divider borders between pieces,
+ * rather than each being its own separately-rounded floating card. Mobile
+ * is exempt: the sidebar becomes a fixed-position overlay drawer there
+ * (see the .sidebar rule below), which intentionally breaks out to the true
+ * viewport edges, so it can't be part of one shared bordered box. */
 .layout {
   display: flex;
   flex: 1;
   min-height: 0;
+  height: 100%;
+  width: 100%;
   position: relative;
+}
+
+@media (min-width: 720px) {
+  .layout {
+    flex: 1;
+    width: 100%;
+    height: 100%;
+    border: 1px solid var(--border);
+    background: var(--bg-raised);
+    overflow: hidden;
+  }
+}
+
+.main-column {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.main-column {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .sidebar-backdrop {
   position: fixed;
-  inset: var(--nav-h) 0 0 0;
+  inset: 0;
   background: rgba(0, 0, 0, 0.4);
   z-index: 25;
   opacity: 0;
@@ -257,19 +340,21 @@ button, input, textarea {
   pointer-events: auto;
 }
 
+/* Full layout height, no toolbar row above it — the reference's sidebar is a
+ * plain panel from the very top edge, distinct from .main-column which
+ * carries its own separate toolbar. */
 .sidebar {
   width: min(85vw, 320px);
   flex-shrink: 0;
-  border-right: 1px solid var(--border);
-  background: var(--bg-alt);
-  padding: var(--space-3);
+  background: var(--bg-raised);
+  padding: 16px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: 0;
 
   position: fixed;
-  top: var(--nav-h);
+  top: 0;
   bottom: 0;
   left: 0;
   transform: translateX(-100%);
@@ -282,11 +367,19 @@ button, input, textarea {
 }
 
 .sidebar h1 {
-  font-size: 15px;
+  font-size: 11px;
   margin: 0;
-  font-weight: 700;
-  padding-left: var(--space-2);
-  border-left: 3px solid var(--dept-accent, var(--accent));
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: 13px;
+  color: var(--text-muted);
+}
+
+.sidebar-subtitle {
+  font-size: 8px;
+  color: var(--text-muted);
+  margin: 0;
+  line-height: 10px;
 }
 
 .dept-tagline {
@@ -298,32 +391,165 @@ button, input, textarea {
 
 .sidebar h2 {
   font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-muted);
-  margin: var(--space-2) 0 0;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text);
+  margin: 22px 0 10px 5px;
+  font-weight: 700;
 }
 
 #goal-form {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: 8px;
+  margin-top: 18px;
 }
 
 textarea {
   resize: vertical;
-  padding: var(--space-2) var(--space-3);
+  padding: 12px 13px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--text);
-  font-size: 14px;
-  line-height: 1.4;
+  background: var(--bg-alt);
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.25;
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
 
-textarea:focus, button:focus-visible {
+#goal-input {
+  height: 122px;
+  min-height: 122px;
+  resize: none;
+}
+
+textarea::placeholder {
+  color: var(--text-faint);
+  opacity: 1;
+}
+
+textarea:focus {
+  border-color: var(--accent);
+  background: var(--bg-raised);
+  outline: none;
+}
+
+button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+.goal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 11px;
+  min-height: 30px;
+  padding-right: 1px;
+}
+
+.attach-circle {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--bg-alt);
+  color: var(--text-muted);
+  border: 0;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease;
+}
+
+.attach-circle:hover:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.attach-circle:active:not(:disabled) {
+  transform: scale(0.93);
+}
+
+.attach-circle svg {
+  width: 17px;
+  height: 17px;
+  stroke-width: 3;
+}
+
+.attach-circle:disabled svg {
+  animation: tool-spin 1s linear infinite;
+}
+
+.goal-actions .ai-button-wrap {
+  flex: 0 0 auto;
+  width: 60px;
+  height: 30px;
+}
+
+.attachment-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.attachment-error {
+  font-size: 11.5px;
+  color: var(--error);
+}
+
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 6px 8px 6px 10px;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.attachment-chip svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--dept-accent, var(--accent));
+}
+
+.attachment-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.attachment-warn svg {
+  width: 14px;
+  height: 14px;
+  color: var(--warning);
+  flex-shrink: 0;
+}
+
+.attachment-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--bg-alt);
+  color: var(--text-muted);
+}
+
+.attachment-remove svg {
+  width: 11px;
+  height: 11px;
 }
 
 button {
@@ -335,6 +561,21 @@ button {
   font-weight: 600;
   cursor: pointer;
   font-size: 14px;
+  transition: filter 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease;
+}
+
+/* Sane default for any plain <button> without its own specific hover rule
+ * (connect/disconnect, reply-submit, theme/sidebar toggles) — buttons that
+ * define their own (.nav-icon, .attach-circle, .ai-button) win on
+ * specificity and are unaffected. */
+@media (hover: hover) {
+  button:not(:disabled):hover {
+    filter: brightness(1.08);
+  }
+}
+
+button:not(:disabled):active {
+  transform: scale(0.96);
 }
 
 button:disabled {
@@ -342,17 +583,19 @@ button:disabled {
   cursor: default;
 }
 
-/* ============ AI button — traveling stroke + bloom ============ */
-/* A comet-shaped arc (mostly transparent, bright for ~60deg) orbits the
- * button via an animated conic-gradient angle. Two independent layers wear
- * it: a thin ring masked to just the border (crisp), and a larger blurred
- * copy sitting behind the button (soft bloom). They're on SEPARATE real
- * boxes — the bloom on the wrapper, the ring on the button itself — on
- * purpose: a negative z-index pseudo-element always paints *above* its own
- * host's background (CSS stacking order puts a stacking-context root's
- * background before its negative-z children), so a same-element trick would
- * wash color across the whole face instead of staying behind it. Two boxes
- * with ordinary z-index (0 then 1) sidesteps that entirely. */
+/* ============ Run button — gradient pill + traveling light stroke ============ */
+/* Soft cyan-to-lavender gradient with dark text (the reference this was
+ * built against), plus a bright comet-shaped highlight that continuously
+ * orbits the pill's edge and a soft bloom behind it — both intensify on
+ * hover, compress on press. The bloom lives on a SEPARATE box (the wrapper)
+ * from the crisp edge-stroke (the button itself, masked to just its
+ * border) on purpose: a negative-z-index pseudo-element always paints
+ * *above* its own host's background (stacking-context roots paint their own
+ * background before their negative-z children), so cramming both onto the
+ * same element would wash color across the whole pill face instead of
+ * staying behind/at the edge of it. Two boxes with ordinary z-index (0 then
+ * 1) sidesteps that entirely — the same fix documented the first time this
+ * bug was hit while building the original dark-mode version of this button. */
 
 @property --ai-angle {
   syntax: "<angle>";
@@ -376,14 +619,15 @@ button:disabled {
     from var(--ai-angle),
     transparent 0deg,
     transparent 250deg,
-    var(--dept-accent, var(--ai-glow)) 300deg,
-    #fff 328deg,
-    var(--dept-accent, var(--ai-glow)) 356deg,
+    var(--dept-accent, #22c1e0) 295deg,
+    #ffffff 318deg,
+    #ffffff 322deg,
+    var(--dept-accent, #c23fe0) 345deg,
     transparent 360deg
   );
-  filter: blur(18px);
-  opacity: 0.75;
-  animation: ai-spin 3.2s linear infinite;
+  filter: blur(16px);
+  opacity: 0.9;
+  animation: ai-spin 3.4s linear infinite;
   transition: opacity 0.15s ease, inset 0.15s ease;
   pointer-events: none;
 }
@@ -396,44 +640,17 @@ button:disabled {
   justify-content: center;
   gap: 6px;
   width: 100%;
+  height: 30px;
+  min-height: 30px;
+  padding: 0 10px;
   border-radius: 999px;
-  background: #0b0b0d;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  color: #fff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
-  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, background 0.15s ease;
-}
-
-.ai-button:hover:not(:disabled) {
-  transform: translateY(-1px);
-  background: #17171a;
-  border-color: rgba(255, 255, 255, 0.18);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
-}
-
-.ai-button:active:not(:disabled) {
-  transform: translateY(0) scale(0.97);
-  background: #0b0b0d;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
-  transition-duration: 0.05s;
-}
-
-/* The glow brightens and quickens right along with the button's own hover
- * lift, so the two read as one reactive object instead of a button with
- * unrelated decoration floating behind it. */
-.ai-button-wrap:has(.ai-button:hover:not(:disabled))::before {
-  opacity: 0.95;
-  animation-duration: 2s;
-}
-
-.ai-button-wrap:has(.ai-button:active:not(:disabled))::before {
-  opacity: 0.6;
-  inset: -8px;
-}
-
-.ai-button svg {
-  width: 16px;
-  height: 16px;
+  background: linear-gradient(90deg, #a9dde4, #cdb8ec);
+  border: none;
+  color: #1c1a2e;
+  font-size: 11px;
+  font-weight: 500;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
 }
 
 .ai-button::before {
@@ -446,26 +663,67 @@ button:disabled {
     from var(--ai-angle),
     transparent 0deg,
     transparent 250deg,
-    var(--dept-accent, var(--ai-glow)) 300deg,
-    #fff 328deg,
-    var(--dept-accent, var(--ai-glow)) 356deg,
+    var(--dept-accent, #1fb0d4) 295deg,
+    #ffffff 318deg,
+    #ffffff 322deg,
+    var(--dept-accent, #a634cf) 345deg,
     transparent 360deg
   );
   -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
-  animation: ai-spin 3.2s linear infinite;
+  animation: ai-spin 3.4s linear infinite;
   pointer-events: none;
 }
 
-.ai-button-wrap:has(.ai-button:disabled)::before {
-  animation-play-state: paused;
-  opacity: 0.3;
+.ai-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+  box-shadow: 0 6px 18px rgba(120, 90, 200, 0.28);
+}
+
+.ai-button:active:not(:disabled) {
+  transform: translateY(0) scale(0.97);
+  filter: brightness(0.98);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  transition-duration: 0.05s;
+}
+
+/* The glow brightens, thickens, and quickens right along with the button's
+ * own hover lift, so the two read as one reactive object. */
+.ai-button-wrap:has(.ai-button:hover:not(:disabled))::before {
+  opacity: 1;
+  inset: -14px;
+  animation-duration: 1.6s;
+}
+
+.ai-button-wrap:has(.ai-button:hover:not(:disabled)) .ai-button::before {
+  padding: 2px;
+  animation-duration: 1.6s;
+}
+
+.ai-button-wrap:has(.ai-button:active:not(:disabled))::before {
+  opacity: 0.6;
+  inset: -6px;
+}
+
+.ai-button:disabled {
+  opacity: 0.5;
 }
 
 .ai-button:disabled::before {
   animation-play-state: paused;
   opacity: 0.3;
+}
+
+.ai-button-wrap:has(.ai-button:disabled)::before {
+  animation-play-state: paused;
+  opacity: 0.2;
+}
+
+.ai-button svg {
+  width: 13px;
+  height: 13px;
 }
 
 @keyframes ai-spin {
@@ -484,39 +742,82 @@ button:disabled {
 .run-list {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 0 7px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 10px;
   overflow-y: auto;
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* old Edge/IE */
+}
+
+.run-list::-webkit-scrollbar {
+  display: none; /* Chrome/Safari/new Edge */
 }
 
 .run-item {
-  padding: var(--space-2);
-  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 0;
+  border-radius: 0;
   cursor: pointer;
-  border: 1px solid transparent;
+  border: 0;
+  transition: background 0.12s ease;
 }
 
 @media (hover: hover) {
   .run-item:hover {
-    background: var(--bg);
+    background: transparent;
   }
 }
 
 .run-item.selected {
-  background: var(--bg);
-  border-color: var(--dept-accent, var(--accent));
+  background: transparent;
+  border-color: transparent;
+}
+
+.run-checkbox {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  margin-top: 4px;
+  border: 1px solid #7a7a7a;
+  border-radius: 0;
+}
+
+.run-item-body {
+  min-width: 0;
+  flex: 1;
 }
 
 .run-item .goal-excerpt {
-  font-size: 13px;
-  display: block;
-  margin-bottom: 3px;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 1px;
+  min-width: 0;
+  line-height: 1.05;
+}
+
+.goal-excerpt-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.status-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.status-dot.running { background: var(--warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 25%, transparent); }
+.status-dot.success { background: var(--success); }
+.status-dot.error { background: var(--error); }
 
 .item-meta {
   font-size: 11px;
@@ -524,6 +825,7 @@ button:disabled {
   display: flex;
   gap: 6px;
   align-items: center;
+  line-height: 1.05;
 }
 
 .main {
@@ -543,6 +845,14 @@ button:disabled {
   margin: 0 auto;
 }
 
+.dashboard {
+  height: 100%;
+}
+
+.dashboard-head {
+  display: none;
+}
+
 .empty-state {
   color: var(--text-muted);
   margin-top: var(--space-5);
@@ -558,66 +868,131 @@ button:disabled {
   font-size: 18px;
 }
 
-.stat-grid {
+/* Bento stat grid: one large "hero" cell (Total runs) plus 3 secondary
+ * cells, each a flat categorical color block per the reference this was
+ * rebuilt against. Colors come from the validated --bento-* tokens (see the
+ * root variable block for the CVD/contrast validation notes) — never department
+ * colors or --accent, which are reserved for their own identities elsewhere
+ * in the app.
+ *
+ * Cells are flush against each other with NO gap — the rounding lives on
+ * .bento-grid itself (one shared outline, clipped via overflow:hidden), not
+ * on individual .bento-cells, matching the reference exactly: one rounded
+ * rectangle divided into flat color zones, not four separate cards.
+ *
+ * Mobile-first: the base rule is a plain single-column stack (hero full
+ * width, secondaries in a 2-up row below it). The asymmetric 4-column
+ * arrangement — hero spanning 2x2 on the left, 3 secondaries filling the
+ * right — only applies at tablet width and up, in the breakpoints section.
+ */
+/* Mobile: the bento grid isn't inside the shared bordered rectangle (that
+ * only applies at >=720px, see .layout — the sidebar is a full-screen
+ * overlay drawer below that width, not part of a shared box), so it keeps
+ * its own rounded, self-contained card treatment there. Desktop flattens it
+ * to sharp/flush, since by then it's flowing inside .layout's single
+ * shared outer border alongside the sidebar and topbar. */
+.bento-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: var(--space-2);
-  margin: var(--space-2) 0 var(--space-3);
-}
-
-.stat-tile {
-  min-width: 0;
-  background: var(--bg-alt);
+  grid-template-columns: 1fr 1fr;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 10px var(--space-3);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  margin: var(--space-3) 0;
 }
 
-.stat-icon {
-  margin-bottom: var(--space-1);
+@media (min-width: 720px) {
+  .bento-grid {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    border: none;
+    border-radius: 0;
+  }
 }
 
-.stat-icon svg {
-  width: 18px;
-  height: 18px;
+/* Mobile arrangement: hero as a plain, uncolored headline (no card fill —
+ * just the number on the page), Success rate as a full-width colored card
+ * below it, then Errors + Documents side by side in a 2-up row. Overridden
+ * at >=720px (below) back to the colored, asymmetric 2x2 desktop layout.
+ * Selector is the compound .bento-hero.bento-mint (specificity 0,2,0), not
+ * just .bento-hero alone — .bento-mint's own background/color rule (below,
+ * later in source, equal specificity if this were a single class) would
+ * otherwise win the cascade and silently repaint the hero mint anyway. */
+.bento-hero.bento-mint {
+  grid-column: 1 / 3;
+  background: transparent;
+  color: var(--text);
 }
 
-.stat-value {
-  font-size: 22px;
-  font-weight: 700;
-  line-height: 1.2;
+.bento-cell:nth-of-type(2) {
+  grid-column: 1 / 3;
+}
+
+.bento-cell {
+  position: relative;
+  min-width: 0;
+  min-height: 120px;
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  /* A cell with a label (currently only the hero) gets two children — the
+   * label and the value group — which space-between pushes to opposite
+   * ends. A cell with just the value group (one child) simply sits at the
+   * start, which is what the secondary cells want: no artificial override
+   * needed per cell type. */
+  justify-content: space-between;
+  /* brightness, not transform: cells are flush against each other with no
+   * gap, so scaling one up would visibly overlap/clip its neighbors. */
+  transition: filter 0.2s ease;
+}
+
+@media (hover: hover) {
+  .bento-cell:hover {
+    filter: brightness(1.07);
+  }
+}
+
+.bento-hero {
+  min-height: 160px;
+}
+
+.bento-mint { background: var(--bento-mint); color: var(--bento-mint-ink); }
+.bento-forest { background: var(--bento-forest); color: var(--bento-forest-ink); }
+.bento-orange { background: var(--bento-orange); color: var(--bento-orange-ink); }
+.bento-lavender { background: var(--bento-lavender); color: var(--bento-lavender-ink); }
+
+.bento-label {
+  font-size: 16px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.7;
+}
+
+.bento-value {
+  font-size: 44px;
+  font-weight: 800;
+  line-height: 1.1;
   font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
 }
 
-.stat-label {
-  font-size: 12px;
-  color: var(--text-muted);
+.bento-hero .bento-value {
+  font-size: 72px;
+}
+
+.bento-caption {
+  font-size: 16px;
+  font-weight: 500;
+  opacity: 0.8;
   margin-top: 2px;
 }
 
-.chart-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: var(--space-3);
-  margin-top: var(--space-3);
-}
-
-.chart-panel {
-  min-width: 0;
-  background: var(--bg-alt);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: var(--space-3);
-}
-
-.chart-wrap {
-  position: relative;
-  min-width: 0;
-  height: 200px;
-}
-
-.chart-wrap canvas {
-  max-width: 100%;
+.bento-subvalue {
+  font-size: 15px;
+  font-weight: 600;
+  opacity: 0.75;
+  margin-top: 4px;
 }
 
 /* ============ Run detail ============ */
@@ -645,11 +1020,11 @@ button:disabled {
 }
 
 .status-badge {
-  font-size: 10px;
+  font-size: 10.5px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.02em;
-  padding: 3px 7px;
+  letter-spacing: 0.03em;
+  padding: 4px 10px;
   border-radius: 999px;
   color: white;
   flex-shrink: 0;
@@ -787,7 +1162,7 @@ button:disabled {
 .msg-text a { color: var(--accent); }
 
 .msg-text code {
-  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-family: inherit;
   font-size: 12px;
   background: var(--bg);
   border: 1px solid var(--border);
@@ -824,6 +1199,7 @@ button:disabled {
   border-radius: var(--radius-sm);
   background: var(--bg);
   overflow: hidden;
+  transition: border-color 0.15s ease;
 }
 
 .tool-card-head {
@@ -838,12 +1214,23 @@ button:disabled {
   font: inherit;
   color: var(--text-muted);
   text-align: left;
+  transition: background 0.15s ease;
+}
+
+@media (hover: hover) {
+  .tool-card-head:hover {
+    background: var(--bg-alt);
+  }
+
+  .tool-card:has(.tool-card-head:hover) {
+    border-color: var(--text-faint);
+  }
 }
 
 .tool-icon svg { width: 13px; height: 13px; opacity: 0.7; flex-shrink: 0; }
 
 .tool-name {
-  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-family: inherit;
   font-size: 12px;
   color: var(--text);
   flex: 1;
@@ -888,7 +1275,7 @@ button:disabled {
 
 .tool-block pre {
   margin: 0;
-  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-family: inherit;
   font-size: 11.5px;
   line-height: 1.5;
   white-space: pre-wrap;
@@ -1002,6 +1389,7 @@ button:disabled {
   border-radius: var(--radius-sm);
   padding: var(--space-2) var(--space-3);
   font-size: 13px;
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
 
 .tasks-list a {
@@ -1048,6 +1436,15 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+@media (hover: hover) {
+  .account-card:not(.unsupported):hover {
+    border-color: var(--accent);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06);
+    transform: translateY(-2px);
+  }
 }
 
 .account-card.unsupported {
@@ -1078,12 +1475,30 @@ button:disabled {
   color: white;
   font-weight: 600;
   font-size: 14px;
+  transition: filter 0.15s ease, transform 0.1s ease;
+}
+
+@media (hover: hover) {
+  .connect-btn:hover {
+    filter: brightness(1.08);
+  }
+}
+
+.connect-btn:active {
+  transform: scale(0.96);
 }
 
 .disconnect-btn {
   background: var(--bg);
   color: var(--error);
   border: 1px solid var(--error);
+}
+
+@media (hover: hover) {
+  .disconnect-btn:hover {
+    background: var(--error);
+    color: white;
+  }
 }
 
 /* ============ Breakpoints ============ */
@@ -1103,10 +1518,16 @@ button:disabled {
     width: var(--sidebar-w);
     transform: none;
     transition: none;
+    border-right: 1px solid var(--border);
   }
 
   .main {
-    padding: var(--space-5) var(--space-5) var(--space-4);
+    padding: 0;
+  }
+
+  .run-detail,
+  .accounts-view {
+    padding: var(--space-5);
   }
 
   .run-header h2 {
@@ -1114,8 +1535,72 @@ button:disabled {
     order: 0;
   }
 
-  .stat-grid {
-    grid-template-columns: repeat(3, 1fr);
+  /* The asymmetric bento arrangement: hero spans 2 columns and both rows on
+   * the left, the 3 secondary cells fill the right (one spanning both rows,
+   * two stacked). Below this width the mobile-first base rule (simple
+   * 2-column stack) applies instead — see the .bento-grid rule itself. */
+  .bento-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(3, minmax(0, 1fr));
+  }
+
+  /* Compound selector (0,2,0), matching the mobile override's own
+   * specificity — a plain .bento-hero here (0,1,0) would lose the cascade
+   * to that rule regardless of this media query, since specificity doesn't
+   * care which block is "more relevant" to the current viewport. */
+  .bento-hero.bento-mint {
+    grid-column: 1 / 3;
+    grid-row: 1;
+    background: var(--bento-mint);
+    color: var(--bento-mint-ink);
+  }
+
+  .bento-cell:nth-of-type(2) {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .bento-cell:nth-of-type(3) {
+    grid-column: 2;
+    grid-row: 2 / 4;
+  }
+
+  .bento-cell:nth-of-type(4) {
+    grid-column: 1;
+    grid-row: 3;
+  }
+
+  .bento-cell,
+  .bento-hero {
+    min-height: 0;
+  }
+
+  .bento-label {
+    font-size: 22px;
+    font-weight: 500;
+    letter-spacing: 0;
+    text-transform: none;
+    opacity: 0.75;
+  }
+
+  .bento-value {
+    font-size: 56px;
+    font-weight: 600;
+    letter-spacing: 0;
+    line-height: 0.95;
+  }
+
+  .bento-hero .bento-value {
+    font-size: 96px;
+  }
+
+  .bento-caption {
+    font-size: 16px;
+    opacity: 1;
+  }
+
+  .bento-subvalue {
+    font-size: 15px;
   }
 }
 
@@ -1132,18 +1617,6 @@ button:disabled {
   .account-cards {
     grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   }
-
-  .stat-grid {
-    grid-template-columns: repeat(5, 1fr);
-  }
-
-  .chart-grid {
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .chart-wrap {
-    height: 240px;
-  }
 }
 
 /* Wide monitors: a bit more side padding than the tablet/desktop baseline.
@@ -1152,6 +1625,11 @@ button:disabled {
  * gutter from looking too tight once there's real room to spare. */
 @media (min-width: 1500px) {
   .main {
+    padding: 0;
+  }
+
+  .run-detail,
+  .accounts-view {
     padding: var(--space-5) calc(var(--space-5) * 2) var(--space-4);
   }
 }

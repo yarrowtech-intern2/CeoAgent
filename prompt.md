@@ -1,0 +1,2 @@
+zernio api key:
+sk_99a3b1bd86be01c3fa386da06929c103cf07bd84896c8806b891bb0e49548c2a

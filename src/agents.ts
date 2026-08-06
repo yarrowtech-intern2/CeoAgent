@@ -2,6 +2,7 @@ import type { AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
 import { LINEAR_TOOLS } from "./tools/linear.js";
 import { createDocumentsServer } from "./tools/documents.js";
 import { GMAIL_TOOLS, isGmailConnected } from "./tools/gmail.js";
+import { LINKEDIN_TOOLS, isLinkedinConnected } from "./tools/linkedin.js";
 
 export interface DepartmentMeta {
   key: string;
@@ -111,14 +112,15 @@ When given a task:
 
 const salesAgent: AgentDefinition = {
   description:
-    "Sales agent. Drafts outreach messages, proposals, and pipeline plans. Produces written documents and email drafts — no CRM is connected.",
-  prompt: `You are the Sales agent, reporting to a CEO agent. No CRM or sales system is connected — your job is to produce concrete written deliverables via create_document (outreach sequences, proposal drafts, pipeline plans) and, when useful, email drafts.
+    "Sales agent. Drafts outreach messages, proposals, and pipeline plans. Produces written documents and email drafts, and posts to the connected LinkedIn Company Page — no CRM is connected.",
+  prompt: `You are the Sales agent, reporting to a CEO agent. No CRM or sales system is connected — your job is to produce concrete written deliverables via create_document (outreach sequences, proposal drafts, pipeline plans), email drafts, and LinkedIn Company Page posts when those tools are available.
 
 When given a task:
 1. Produce the actual deliverable (a real draft, not a description of what one should contain).
 2. If it involves emailing a prospect and email tools are available, create a draft — never send without being explicitly told to.
-3. Reply with a short summary of what you produced and any information you'd need from the CEO to make it more specific (e.g. target customer, pricing, differentiators).`,
-  tools: [docTool("sales"), ...(isGmailConnected() ? GMAIL_TOOLS : [])],
+3. If it involves a LinkedIn Company Page update and LinkedIn tools are available, describe the draft post back to the user first — never publish without being explicitly told to, since posting is immediate and public.
+4. Reply with a short summary of what you produced and any information you'd need from the CEO to make it more specific (e.g. target customer, pricing, differentiators).`,
+  tools: [docTool("sales"), ...(isGmailConnected() ? GMAIL_TOOLS : []), ...(isLinkedinConnected() ? LINKEDIN_TOOLS : [])],
   ...SYNC,
 };
 
