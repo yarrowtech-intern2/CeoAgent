@@ -37,6 +37,9 @@ import {
   getRun,
   listRuns,
   listRunsFor,
+  archiveRun,
+  unarchiveRun,
+  deleteRun,
   subscribe,
 } from "./store.js";
 
@@ -273,17 +276,21 @@ app.get("/api/analytics", (_req, res) => {
 
 app.get("/api/runs", (req, res) => {
   const agentKey = typeof req.query.agentKey === "string" ? req.query.agentKey : undefined;
-  const runs = (agentKey ? listRunsFor(agentKey) : listRuns()).map((r) => ({
-    id: r.id,
-    goal: r.goal,
-    agentKey: r.agentKey,
-    status: r.status,
-    createdAt: r.createdAt,
-    finishedAt: r.finishedAt,
-    costUsd: r.costUsd,
-    summary: r.summary,
-    linearTasks: r.linearTasks,
-  }));
+  const showArchived = req.query.archived === "true";
+  const runs = (agentKey ? listRunsFor(agentKey) : listRuns())
+    .filter((r) => Boolean(r.archived) === showArchived)
+    .map((r) => ({
+      id: r.id,
+      goal: r.goal,
+      agentKey: r.agentKey,
+      status: r.status,
+      createdAt: r.createdAt,
+      finishedAt: r.finishedAt,
+      costUsd: r.costUsd,
+      summary: r.summary,
+      linearTasks: r.linearTasks,
+      archived: Boolean(r.archived),
+    }));
   res.json(runs);
 });
 
@@ -294,6 +301,48 @@ app.get("/api/runs/:id", (req, res) => {
     return;
   }
   res.json(record);
+});
+
+// --- Archive/delete: archive is reversible (hides a run from the default
+// list without losing its transcript); delete is permanent, so it's blocked
+// on running (in case an emitter is still live) and expected to be
+// confirmed client-side before this ever gets called. ---
+
+app.post("/api/runs/:id/archive", (req, res) => {
+  const record = getRun(req.params.id);
+  if (!record) {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+  if (record.status === "running") {
+    res.status(409).json({ error: "can't archive a run in progress" });
+    return;
+  }
+  archiveRun(record.id);
+  res.json({ ok: true });
+});
+
+app.post("/api/runs/:id/unarchive", (req, res) => {
+  const ok = unarchiveRun(req.params.id);
+  if (!ok) {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+  res.json({ ok: true });
+});
+
+app.delete("/api/runs/:id", (req, res) => {
+  const record = getRun(req.params.id);
+  if (!record) {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+  if (record.status === "running") {
+    res.status(409).json({ error: "can't delete a run in progress" });
+    return;
+  }
+  deleteRun(record.id);
+  res.json({ ok: true });
 });
 
 app.get("/api/runs/:id/stream", (req, res) => {

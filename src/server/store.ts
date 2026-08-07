@@ -25,6 +25,9 @@ export interface RunRecord {
   /** Claude Agent SDK session ID, once known — lets a finished run be
    * resumed later via a reply instead of starting a fresh, context-less run. */
   sessionId?: string;
+  /** Hidden from the default task list but not deleted — distinct from
+   * `status`, which tracks execution outcome rather than visibility. */
+  archived?: boolean;
 }
 
 const runs = new Map<string, RunRecord>();
@@ -134,6 +137,34 @@ export function reopenRun(id: string): boolean {
   if (!record) return false;
   record.status = "running";
   emitters.set(id, new EventEmitter().setMaxListeners(50));
+  persist();
+  return true;
+}
+
+export function archiveRun(id: string): boolean {
+  const record = runs.get(id);
+  if (!record) return false;
+  record.archived = true;
+  persist();
+  return true;
+}
+
+export function unarchiveRun(id: string): boolean {
+  const record = runs.get(id);
+  if (!record) return false;
+  record.archived = false;
+  persist();
+  return true;
+}
+
+/** Hard delete — removes the record entirely, including its transcript and
+ * cost history, and cannot be undone (callers should confirm with the user
+ * first). Distinct from archiveRun, which only hides a run reversibly. */
+export function deleteRun(id: string): boolean {
+  if (!runs.has(id)) return false;
+  runs.delete(id);
+  emitters.get(id)?.removeAllListeners();
+  emitters.delete(id);
   persist();
   return true;
 }

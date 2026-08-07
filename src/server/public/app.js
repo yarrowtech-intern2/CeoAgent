@@ -6,6 +6,7 @@ const state = {
   departments: [],
   accounts: [],
   runs: [],
+  showArchived: false, // toggles the sidebar's Tasks lists between active and archived runs
   selectedRunId: null,
   selectedRun: null,
   documents: [],
@@ -17,6 +18,7 @@ const state = {
   attachment: null, // { filename, text, truncated } | null — a parsed file pending on the goal form
   attaching: false, // true while an upload is being parsed server-side
   attachError: null, // error message from a failed upload, cleared on next attempt
+  confirmModal: null, // { title, message, confirmLabel, danger, onConfirm } | null
 };
 
 let eventSource = null;
@@ -108,6 +110,22 @@ function systemPrefersDark() {
   return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
 }
 
+// Matches the CSS `@media (min-width: 720px)` breakpoint (style.css) that
+// turns .sidebar from an off-canvas drawer into a permanent column — below
+// it, render() moves the composer out of that drawer into .main instead.
+const MOBILE_LAYOUT_QUERY = "(max-width: 719.98px)";
+
+function isMobileLayout() {
+  return window.matchMedia?.(MOBILE_LAYOUT_QUERY).matches ?? false;
+}
+
+// Re-render only when crossing the breakpoint (not on every resize pixel),
+// so the composer hops between .sidebar and .main as the viewport crosses
+// 720px without spamming re-renders.
+function initResponsiveLayout() {
+  window.matchMedia?.(MOBILE_LAYOUT_QUERY).addEventListener("change", () => render());
+}
+
 function toggleTheme() {
   state.theme = state.theme === "dark" ? "light" : "dark";
   localStorage.setItem("theme", state.theme);
@@ -136,13 +154,80 @@ async function loadAnalytics() {
 }
 
 async function loadRunsForCurrentView() {
+  const archivedParam = `archived=${state.showArchived}`;
   if (state.view.type === "overview") {
-    state.runs = await fetchJSON("/api/runs");
+    state.runs = await fetchJSON(`/api/runs?${archivedParam}`);
   } else if (state.view.type === "department") {
-    state.runs = await fetchJSON(`/api/runs?agentKey=${encodeURIComponent(state.view.key)}`);
+    state.runs = await fetchJSON(
+      `/api/runs?agentKey=${encodeURIComponent(state.view.key)}&${archivedParam}`,
+    );
   } else {
     state.runs = [];
   }
+}
+
+async function toggleArchivedFilter() {
+  state.showArchived = !state.showArchived;
+  await loadRunsForCurrentView();
+  render();
+}
+
+// Archive/unarchive/delete all refresh the current task list afterward, and
+// clear the open run detail if that's the run just acted on — archived runs
+// stay viewable via the Archived toggle, but a deleted one no longer exists.
+async function archiveRun(id) {
+  await fetchJSON(`/api/runs/${id}/archive`, { method: "POST" });
+  await loadRunsForCurrentView();
+  if (state.selectedRunId === id) {
+    state.selectedRunId = null;
+    state.selectedRun = null;
+  }
+  render();
+}
+
+async function unarchiveRun(id) {
+  await fetchJSON(`/api/runs/${id}/unarchive`, { method: "POST" });
+  await loadRunsForCurrentView();
+  if (state.selectedRunId === id) {
+    state.selectedRunId = null;
+    state.selectedRun = null;
+  }
+  render();
+}
+
+function deleteRun(id) {
+  openConfirmModal({
+    title: "Delete this task?",
+    message: "Its log and cost history will be permanently removed. This can't be undone.",
+    confirmLabel: "Delete",
+    danger: true,
+    onConfirm: () => performDeleteRun(id),
+  });
+}
+
+async function performDeleteRun(id) {
+  await fetchJSON(`/api/runs/${id}`, { method: "DELETE" });
+  await loadRunsForCurrentView();
+  if (state.selectedRunId === id) {
+    state.selectedRunId = null;
+    state.selectedRun = null;
+  }
+  render();
+}
+
+// ---------- Confirm modal ----------
+//
+// A single reusable centered dialog for anything that needs a yes/no gate
+// before a destructive action, replacing window.confirm() with UI that
+// matches the app instead of the browser's native prompt.
+function openConfirmModal({ title, message, confirmLabel = "Confirm", danger = false, onConfirm }) {
+  state.confirmModal = { title, message, confirmLabel, danger, onConfirm };
+  render();
+}
+
+function closeConfirmModal() {
+  state.confirmModal = null;
+  render();
 }
 
 async function loadDocumentsForCurrentView() {
@@ -165,6 +250,7 @@ async function switchView(view) {
   state.selectedRun = null;
   state.liveLinearTasks = [];
   state.sidebarOpen = false;
+  state.showArchived = false;
   render();
   const loaders = [loadRunsForCurrentView(), loadDocumentsForCurrentView()];
   if (view.type === "overview") loaders.push(loadAnalytics());
@@ -358,13 +444,17 @@ function render() {
   const prevScrollTop = prevLog?.scrollTop ?? 0;
 
   const showSidebar = state.view.type !== "accounts";
+  const mobile = isMobileLayout();
   app.innerHTML = `
     <div class="layout">
       ${showSidebar ? `<div class="sidebar-backdrop${state.sidebarOpen ? " open" : ""}" id="sidebar-backdrop"></div>` : ""}
-      ${showSidebar ? renderSidebar() : ""}
+      ${showSidebar ? renderSidebar(mobile) : ""}
       <div class="main-column">
         ${renderNav()}
-        <main class="main">${renderMain()}</main>
+        <main class="main">
+          ${showSidebar && mobile ? renderComposer() : ""}
+          ${renderMain()}
+        </main>
       </div>
     </div>
     <div id="nav-tooltip"></div>
@@ -424,7 +514,10 @@ function animateEntrance(viewChanged) {
     return;
   }
   if (!viewChanged) return;
-  const mainChild = document.querySelector(".main")?.firstElementChild;
+  // .main's last child is always the actual view content (.dashboard,
+  // .run-detail, .empty-state, .accounts-view) — its first child is the
+  // composer on mobile (see render()), which shouldn't replay this fade.
+  const mainChild = document.querySelector(".main")?.lastElementChild;
   if (mainChild) {
     gsap.fromTo(mainChild, { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.35, ease: "power2.out" });
   }
@@ -563,7 +656,12 @@ function renderGoalActions() {
   `;
 }
 
-function renderSidebar() {
+// The composer (title + goal form) is rendered as its own function, not
+// inlined in renderSidebar(), because on mobile it moves out of the
+// off-canvas .sidebar drawer entirely and sits always-visible at the top of
+// .main instead (see render()) — only the run history stays behind the
+// hamburger there. Desktop keeps it inside .sidebar, unchanged.
+function renderComposer() {
   const placeholder =
     state.view.type === "overview"
       ? "Give me a task..."
@@ -572,7 +670,7 @@ function renderSidebar() {
   const style = accent ? ` style="--dept-accent:${accent}"` : "";
 
   return `
-    <aside class="sidebar${state.sidebarOpen ? " open" : ""}" id="sidebar"${style}>
+    <div class="composer"${style}>
       <h1>${state.view.type === "overview" ? "House of Musa" : escapeHtml(viewLabel())}</h1>
       <p class="sidebar-subtitle">${state.view.type === "overview" ? "Ceo Agent" : escapeHtml(departmentMeta(state.view.key)?.tagline ?? "Department")}</p>
 
@@ -583,8 +681,33 @@ function renderSidebar() {
         ${renderAttachmentRow()}
         ${renderGoalActions()}
       </form>
+    </div>
+  `;
+}
 
-      <h2>Tasks lists</h2>
+function renderRunActionIcons(run) {
+  const archiveIcon = run.archived
+    ? `<button type="button" class="run-action-icon" data-unarchive-run="${run.id}" title="Unarchive" aria-label="Unarchive"><i data-lucide="archive-restore"></i></button>`
+    : `<button type="button" class="run-action-icon" data-archive-run="${run.id}" title="Archive" aria-label="Archive" ${run.status === "running" ? "disabled" : ""}><i data-lucide="archive"></i></button>`;
+  return `
+    <span class="run-item-actions">
+      ${archiveIcon}
+      <button type="button" class="run-action-icon run-action-danger" data-delete-run="${run.id}" title="Delete" aria-label="Delete" ${run.status === "running" ? "disabled" : ""}><i data-lucide="trash-2"></i></button>
+    </span>
+  `;
+}
+
+function renderSidebar(mobile) {
+  return `
+    <aside class="sidebar${state.sidebarOpen ? " open" : ""}" id="sidebar">
+      ${mobile ? "" : renderComposer()}
+
+      <div class="tasks-header">
+        <h2>Tasks lists</h2>
+        <button type="button" class="archive-toggle-btn" id="toggle-archived-btn">
+          ${state.showArchived ? "Active" : "Archived"}
+        </button>
+      </div>
       <ul class="run-list">
         ${state.runs
           .map(
@@ -598,10 +721,12 @@ function renderSidebar() {
               </span>
               <span class="item-meta">${formatTime(run.createdAt)}</span>
             </span>
+            ${renderRunActionIcons(run)}
           </li>
         `,
           )
-          .join("") || '<li class="tasks-empty">No runs yet.</li>'}
+          .join("") ||
+          `<li class="tasks-empty">${state.showArchived ? "No archived tasks." : "No runs yet."}</li>`}
       </ul>
     </aside>
   `;
@@ -777,13 +902,30 @@ function renderOverviewDashboard() {
 function renderRunDetail() {
   const run = state.selectedRun;
   const showDocuments = state.view.type === "department" && state.view.key !== "manager";
+  const source = run.agentKey === "ceo" ? "CEO" : (departmentMeta(run.agentKey)?.label ?? capitalize(run.agentKey));
+  const timestamps = [
+    `Started ${formatTime(run.createdAt)}`,
+    run.finishedAt ? `Finished ${formatTime(run.finishedAt)}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return `
     <div class="run-detail">
       <header class="run-header">
         <span class="status-badge ${run.status}">${statusLabel(run.status)}</span>
-        <h2>${escapeHtml(run.goal)}</h2>
+        ${run.archived ? `<span class="status-badge archived">Archived</span>` : ""}
         <span class="run-meta">${run.costUsd != null ? `$${run.costUsd.toFixed(4)}` : ""}</span>
+        <div class="run-actions">
+          ${
+            run.archived
+              ? `<button type="button" class="run-action-btn" data-unarchive-run="${run.id}" title="Unarchive" aria-label="Unarchive"><i data-lucide="archive-restore"></i></button>`
+              : `<button type="button" class="run-action-btn" data-archive-run="${run.id}" title="Archive" aria-label="Archive" ${run.status === "running" ? "disabled" : ""}><i data-lucide="archive"></i></button>`
+          }
+          <button type="button" class="run-action-btn run-action-danger" data-delete-run="${run.id}" title="Delete" aria-label="Delete" ${run.status === "running" ? "disabled" : ""}><i data-lucide="trash-2"></i></button>
+        </div>
+        <h2>${escapeHtml(run.goal)}</h2>
+        <p class="run-subheader">${escapeHtml(source)} · ${timestamps}</p>
       </header>
 
       <div class="panels">
@@ -1033,6 +1175,30 @@ function attachHandlers() {
     li.addEventListener("click", () => selectRun(li.dataset.runId));
   });
 
+  document.getElementById("toggle-archived-btn")?.addEventListener("click", () => toggleArchivedFilter());
+
+  // Action icons live inside .run-item (sidebar list) or .run-header
+  // (detail page) — stopPropagation so clicking one doesn't also trigger
+  // the parent .run-item's click-to-select handler above.
+  document.querySelectorAll("[data-archive-run]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      archiveRun(btn.dataset.archiveRun);
+    });
+  });
+  document.querySelectorAll("[data-unarchive-run]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      unarchiveRun(btn.dataset.unarchiveRun);
+    });
+  });
+  document.querySelectorAll("[data-delete-run]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      deleteRun(btn.dataset.deleteRun);
+    });
+  });
+
   document.querySelectorAll(".doc-item").forEach((li) => {
     li.addEventListener("click", () => openDocument(li.dataset.docId));
   });
@@ -1170,6 +1336,7 @@ async function init() {
   initTheme();
   initNavTooltip();
   initLogInteractions();
+  initResponsiveLayout();
   await Promise.all([loadDepartments(), loadAccounts()]);
   await Promise.all([loadRunsForCurrentView(), loadAnalytics()]);
   render();
