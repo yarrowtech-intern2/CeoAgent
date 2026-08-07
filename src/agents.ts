@@ -3,6 +3,8 @@ import { LINEAR_TOOLS } from "./tools/linear.js";
 import { createDocumentsServer } from "./tools/documents.js";
 import { GMAIL_TOOLS, isGmailConnected } from "./tools/gmail.js";
 import { LINKEDIN_TOOLS, isLinkedinConnected } from "./tools/linkedin.js";
+import { ZERNIO_TOOLS, isZernioConnected } from "./tools/zernio.js";
+import { INSTAGRAM_TOOLS, isInstagramConnected } from "./tools/instagram.js";
 
 export interface DepartmentMeta {
   key: string;
@@ -112,15 +114,23 @@ When given a task:
 
 const salesAgent: AgentDefinition = {
   description:
-    "Sales agent. Drafts outreach messages, proposals, and pipeline plans. Produces written documents and email drafts, and posts to the connected LinkedIn Company Page — no CRM is connected.",
-  prompt: `You are the Sales agent, reporting to a CEO agent. No CRM or sales system is connected — your job is to produce concrete written deliverables via create_document (outreach sequences, proposal drafts, pipeline plans), email drafts, and LinkedIn Company Page posts when those tools are available.
+    "Sales agent. Drafts outreach messages, proposals, and pipeline plans. Produces written documents and email drafts, reads Instagram DMs, and posts/DMs to connected social platforms (LinkedIn Company Page, and any platform linked via Zernio) — no CRM is connected.",
+  prompt: `You are the Sales agent, reporting to a CEO agent. No CRM or sales system is connected — your job is to produce concrete written deliverables via create_document (outreach sequences, proposal drafts, pipeline plans), email drafts, and social posts/DMs when those tools are available.
 
 When given a task:
 1. Produce the actual deliverable (a real draft, not a description of what one should contain).
 2. If it involves emailing a prospect and email tools are available, create a draft — never send without being explicitly told to.
 3. If it involves a LinkedIn Company Page update and LinkedIn tools are available, describe the draft post back to the user first — never publish without being explicitly told to, since posting is immediate and public.
-4. Reply with a short summary of what you produced and any information you'd need from the CEO to make it more specific (e.g. target customer, pricing, differentiators).`,
-  tools: [docTool("sales"), ...(isGmailConnected() ? GMAIL_TOOLS : []), ...(isLinkedinConnected() ? LINKEDIN_TOOLS : [])],
+4. If Zernio tools are available (multi-platform posting/DMs), use list_zernio_accounts to see what's connected before drafting for a specific platform, and describe the draft back to the user first — never post or send a message without being explicitly told to.
+5. If Instagram tools are available, use them to check/summarize DM conversations for lead context — this is read-only, there's no send capability for Instagram.
+6. Reply with a short summary of what you produced and any information you'd need from the CEO to make it more specific (e.g. target customer, pricing, differentiators).`,
+  tools: [
+    docTool("sales"),
+    ...(isGmailConnected() ? GMAIL_TOOLS : []),
+    ...(isLinkedinConnected() ? LINKEDIN_TOOLS : []),
+    ...(isZernioConnected() ? ZERNIO_TOOLS : []),
+    ...(isInstagramConnected() ? INSTAGRAM_TOOLS : []),
+  ],
   ...SYNC,
 };
 

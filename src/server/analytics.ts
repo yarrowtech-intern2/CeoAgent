@@ -47,5 +47,28 @@ export function getAnalytics() {
     count: listRunsFor(d.key).length,
   }));
 
-  return { totals, runsByDay, runsByDepartment };
+  // listRuns()/listDocuments() are already sorted newest-first, so a plain
+  // slice after filtering gives the most recent N — real run/document data,
+  // not a placeholder feed.
+  const recentErrors = runs
+    .filter((r) => r.status === "error")
+    .slice(0, 5)
+    .map((r) => ({
+      id: r.id,
+      goal: r.goal,
+      agentKey: r.agentKey,
+      createdAt: r.finishedAt ?? r.createdAt,
+      error: r.summary ?? "Unknown error",
+    }));
+
+  const recentDocuments = documents.slice(0, 5).map((d) => ({
+    id: d.id,
+    title: d.title,
+    agentKey: d.agentKey,
+    createdAt: d.createdAt,
+  }));
+
+  const recentLinearTasks = runs.flatMap((r) => r.linearTasks).slice(0, 5);
+
+  return { totals, runsByDay, runsByDepartment, recentErrors, recentDocuments, recentLinearTasks };
 }

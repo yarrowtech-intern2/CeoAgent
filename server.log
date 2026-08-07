@@ -2,4 +2,4 @@
 > ceo-agent-os@0.1.0 start
 > tsx src/server/index.ts
 
-CEO Agent OS running at http://localhost:3000
+CEO Agent OS running at http://localhost:3100

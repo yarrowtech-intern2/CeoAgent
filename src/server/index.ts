@@ -26,6 +26,7 @@ import {
   isLinkedinConnected,
   disconnectLinkedin,
 } from "../tools/linkedin.js";
+import { isZernioConnected } from "../tools/zernio.js";
 import {
   createRun,
   appendEvent,
@@ -68,6 +69,29 @@ app.post("/api/uploads", upload.single("file"), async (req, res) => {
   }
 });
 
+// Fires a POST to WEBHOOK_URL (if configured) with the finished run's result,
+// so n8n/Zapier can react without polling. Fire-and-forget: a webhook
+// receiver being down must never affect the run itself, which has already
+// finished by the time this is called.
+function notifyWebhook(record: { id: string; agentKey: string; status: string; summary?: string; costUsd?: number; linearTasks: LinearTaskRef[] }) {
+  const url = process.env.WEBHOOK_URL;
+  if (!url) return;
+  fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      runId: record.id,
+      agentKey: record.agentKey,
+      status: record.status,
+      summary: record.summary,
+      costUsd: record.costUsd,
+      linearTasks: record.linearTasks,
+    }),
+  }).catch((err) => {
+    console.error(`webhook delivery failed for run ${record.id}:`, err instanceof Error ? err.message : err);
+  });
+}
+
 function startRun(
   record: { id: string },
   run: () => Promise<{ linearTasks: LinearTaskRef[]; sessionId?: string }>,
@@ -86,7 +110,11 @@ function startRun(
         ts: new Date().toISOString(),
       });
     })
-    .finally(() => finishRun(record.id));
+    .finally(() => {
+      finishRun(record.id);
+      const finished = getRun(record.id);
+      if (finished) notifyWebhook(finished);
+    });
 }
 
 interface AttachmentInput {
@@ -115,17 +143,28 @@ function buildPrompt(goal: string, attachment: AttachmentInput | undefined): str
 
 // --- Runs: CEO overview (delegates to whichever specialists fit) ---
 
+function startCeoRun(goal: string, attachment: AttachmentInput | undefined) {
+  const record = createRun(goal, "ceo");
+  startRun(record, () => runCeoAgent(buildPrompt(goal, attachment), (event) => appendEvent(record.id, event)));
+  return record;
+}
+
+function startSpecialistRun(key: string, goal: string, attachment: AttachmentInput | undefined) {
+  const record = createRun(goal, key);
+  startRun(record, () =>
+    runSpecialistAgent(key, buildPrompt(goal, attachment), (event) => appendEvent(record.id, event)),
+  );
+  return record;
+}
+
 app.post("/api/runs", (req, res) => {
   const goal = typeof req.body?.goal === "string" ? req.body.goal.trim() : "";
   if (!goal) {
     res.status(400).json({ error: "goal is required" });
     return;
   }
-  const attachment = readAttachment(req.body);
-
-  const record = createRun(goal, "ceo");
+  const record = startCeoRun(goal, readAttachment(req.body));
   res.status(201).json({ id: record.id });
-  startRun(record, () => runCeoAgent(buildPrompt(goal, attachment), (event) => appendEvent(record.id, event)));
 });
 
 // --- Runs: direct to one specialist, bypassing the CEO ---
@@ -141,13 +180,52 @@ app.post("/api/agents/:key/runs", (req, res) => {
     res.status(400).json({ error: "goal is required" });
     return;
   }
-  const attachment = readAttachment(req.body);
-
-  const record = createRun(goal, key);
+  const record = startSpecialistRun(key, goal, readAttachment(req.body));
   res.status(201).json({ id: record.id });
-  startRun(record, () =>
-    runSpecialistAgent(key, buildPrompt(goal, attachment), (event) => appendEvent(record.id, event)),
-  );
+});
+
+// --- Automation: same run-creation, gated by a shared API key instead of
+// being reachable by anyone loading the page. This is the surface external
+// automation tools (n8n, Zapier) call — kept separate from /api/runs and
+// /api/agents/:key/runs above so the browser UI never needs to carry a
+// secret client-side.
+
+function requireAutomationKey(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const configuredKey = process.env.AUTOMATION_API_KEY;
+  if (!configuredKey) {
+    res.status(503).json({ error: "AUTOMATION_API_KEY is not configured on this server" });
+    return;
+  }
+  if (req.header("X-API-Key") !== configuredKey) {
+    res.status(401).json({ error: "invalid or missing X-API-Key header" });
+    return;
+  }
+  next();
+}
+
+app.post("/api/automation/runs", requireAutomationKey, (req, res) => {
+  const goal = typeof req.body?.goal === "string" ? req.body.goal.trim() : "";
+  if (!goal) {
+    res.status(400).json({ error: "goal is required" });
+    return;
+  }
+  const record = startCeoRun(goal, readAttachment(req.body));
+  res.status(201).json({ id: record.id });
+});
+
+app.post("/api/automation/agents/:key/runs", requireAutomationKey, (req, res) => {
+  const { key } = req.params;
+  if (!AGENT_KEYS.has(key)) {
+    res.status(404).json({ error: `unknown agent: ${key}` });
+    return;
+  }
+  const goal = typeof req.body?.goal === "string" ? req.body.goal.trim() : "";
+  if (!goal) {
+    res.status(400).json({ error: "goal is required" });
+    return;
+  }
+  const record = startSpecialistRun(key, goal, readAttachment(req.body));
+  res.status(201).json({ id: record.id });
 });
 
 // --- Reply: continue a finished run's same agent conversation, instead of
@@ -298,6 +376,14 @@ app.get("/api/accounts", (_req, res) => {
     { key: "gmail", label: "Gmail", connected: isGmailConnected(), connectUrl: "/auth/gmail" },
     { key: "instagram", label: "Instagram", connected: isInstagramConnected(), connectUrl: "/auth/instagram" },
     { key: "linkedin", label: "LinkedIn", connected: isLinkedinConnected(), connectUrl: "/auth/linkedin" },
+    {
+      key: "zernio",
+      label: "Zernio (social & messaging)",
+      connected: isZernioConnected(),
+      configOnly: true,
+      configHint: "Set ZERNIO_API_KEY in your .env file, then restart the server. Get a key at zernio.com → Settings → API Keys, and link platform accounts from Zernio's own dashboard.",
+      signupUrl: "https://zernio.com",
+    },
   ]);
 });
 

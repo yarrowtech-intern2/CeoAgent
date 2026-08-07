@@ -577,7 +577,9 @@ function renderSidebar() {
       <p class="sidebar-subtitle">${state.view.type === "overview" ? "Ceo Agent" : escapeHtml(departmentMeta(state.view.key)?.tagline ?? "Department")}</p>
 
       <form id="goal-form">
-        <textarea id="goal-input" placeholder="${placeholder}" rows="4" required></textarea>
+        <div class="goal-input-shell">
+          <textarea id="goal-input" placeholder="${placeholder}" rows="4" required></textarea>
+        </div>
         ${renderAttachmentRow()}
         ${renderGoalActions()}
       </form>
@@ -619,16 +621,84 @@ function renderMain() {
 // pushes them to opposite ends of the taller hero cell, top and bottom. A
 // cell with no label has just the one value-group child, which naturally
 // sits at the top instead, matching the reference's secondary cells.
-function bentoCell(colorClass, label, value, caption, subvalue) {
+function truncateText(str, n) {
+  if (!str) return "";
+  return str.length > n ? `${str.slice(0, n - 1)}…` : str;
+}
+
+// A translucent multi-segment ring, drawn as plain stacked <circle> arcs —
+// no charting library, just stroke-dasharray/-dashoffset math. Opacity is
+// applied in CSS (.bento-ring), not baked into these colors, so it stays
+// tunable in one place.
+function donutRing(segments, { size = 84, strokeWidth = 10 } = {}) {
+  const total = segments.reduce((sum, s) => sum + s.value, 0);
+  if (!total) return "";
+  const r = (size - strokeWidth) / 2;
+  const c = size / 2;
+  const circumference = 2 * Math.PI * r;
+  let offset = 0;
+  const arcs = segments
+    .filter((s) => s.value > 0)
+    .map((s) => {
+      const len = (s.value / total) * circumference;
+      const circle = `<circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${s.color}" stroke-width="${strokeWidth}" stroke-dasharray="${len} ${circumference - len}" stroke-dashoffset="${-offset}" transform="rotate(-90 ${c} ${c})" />`;
+      offset += len;
+      return circle;
+    })
+    .join("");
+  return `<svg class="bento-ring" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true">${arcs}</svg>`;
+}
+
+function bentoDeptBreakdown(runsByDepartment) {
+  const items = runsByDepartment.filter((d) => d.count > 0);
+  if (!items.length) return '<div class="bento-detail-empty">No runs yet.</div>';
   return `
-    <div class="bento-cell ${colorClass}">
-      ${label ? `<div class="bento-label">${escapeHtml(label)}</div>` : ""}
-      <div class="bento-value-group">
-        <div class="bento-value">${value}</div>
-        <div class="bento-caption">${escapeHtml(caption)}</div>
-        ${subvalue ? `<div class="bento-subvalue">${escapeHtml(subvalue)}</div>` : ""}
-      </div>
-    </div>
+    <ul data-lenis-prevent class="bento-detail-list bento-dept-breakdown">
+      ${items
+        .map((d) => {
+          const color = departmentMeta(d.key)?.color[state.theme] ?? "currentColor";
+          return `<li><span class="bento-dept-dot" style="background:${color}"></span>${escapeHtml(d.label)}<span class="bento-dept-count">${d.count}</span></li>`;
+        })
+        .join("")}
+    </ul>
+  `;
+}
+
+function bentoErrorList(recentErrors) {
+  if (!recentErrors.length) return '<div class="bento-detail-empty">No errors — clean run history.</div>';
+  return `
+    <ul data-lenis-prevent class="bento-detail-list">
+      ${recentErrors
+        .map(
+          (e) => `
+        <li class="bento-detail-item" data-run-id="${e.id}">
+          <div class="bento-detail-item-head">
+            <strong>${escapeHtml(departmentMeta(e.agentKey)?.label ?? capitalize(e.agentKey))}</strong>
+            <span class="bento-detail-time">${formatClock(e.createdAt)}</span>
+          </div>
+          <div class="bento-detail-goal">${escapeHtml(truncateText(e.goal, 60))}</div>
+          <div class="bento-detail-error">${escapeHtml(truncateText(e.error, 90))}</div>
+        </li>`,
+        )
+        .join("")}
+    </ul>
+  `;
+}
+
+function bentoDocumentList(recentDocuments) {
+  if (!recentDocuments.length) return '<div class="bento-detail-empty">None yet.</div>';
+  return `
+    <ul data-lenis-prevent class="bento-detail-list">
+      ${recentDocuments
+        .map(
+          (d) => `
+        <li class="bento-detail-item" data-doc-id="${d.id}">
+          <strong>${escapeHtml(truncateText(d.title, 46))}</strong>
+          <span class="bento-detail-time">${escapeHtml(departmentMeta(d.agentKey)?.label ?? capitalize(d.agentKey))} · ${formatClock(d.createdAt)}</span>
+        </li>`,
+        )
+        .join("")}
+    </ul>
   `;
 }
 
@@ -640,6 +710,18 @@ function renderOverviewDashboard() {
     ? Math.round((a.totals.successRuns / a.totals.totalRuns) * 100)
     : null;
 
+  const runsRing = donutRing(
+    a.runsByDepartment
+      .filter((d) => d.count > 0)
+      .map((d) => ({ value: d.count, color: departmentMeta(d.key)?.color[state.theme] ?? "currentColor" })),
+  );
+
+  const successRing = donutRing([
+    { value: a.totals.successRuns, color: "var(--bento-forest-ink)" },
+    { value: a.totals.errorRuns, color: "var(--error)" },
+    { value: a.totals.runningRuns, color: "var(--warning)" },
+  ]);
+
   return `
     <div class="dashboard">
       <div class="dashboard-head">
@@ -648,10 +730,45 @@ function renderOverviewDashboard() {
       </div>
 
       <div class="bento-grid">
-        ${bentoCell("bento-mint bento-hero", "Overview", a.totals.totalRuns, "Total runs")}
-        ${bentoCell("bento-forest", null, successRate == null ? "—" : `${successRate}%`, "Success rate")}
-        ${bentoCell("bento-orange", null, a.totals.errorRuns, "Errors")}
-        ${bentoCell("bento-lavender", null, a.totals.totalDocuments, "Documents analysed", `${a.totals.totalLinearTasks} Linear tasks`)}
+        <div class="bento-cell bento-mint bento-hero">
+          ${runsRing ? `<div class="bento-ring-wrap">${runsRing}</div>` : ""}
+          <div class="bento-label">Overview</div>
+          <div class="bento-value-group">
+            <div class="bento-value">${a.totals.totalRuns}</div>
+            <div class="bento-caption">Total runs</div>
+          </div>
+          ${bentoDeptBreakdown(a.runsByDepartment)}
+        </div>
+
+        <div class="bento-cell bento-forest">
+          ${successRing ? `<div class="bento-ring-wrap">${successRing}</div>` : ""}
+          <div class="bento-value-group">
+            <div class="bento-value">${successRate == null ? "—" : `${successRate}%`}</div>
+            <div class="bento-caption">Success rate</div>
+          </div>
+          <div class="bento-status-breakdown">
+            <div><span class="bento-dot success"></span>${a.totals.successRuns} success</div>
+            <div><span class="bento-dot error"></span>${a.totals.errorRuns} error</div>
+            <div><span class="bento-dot running"></span>${a.totals.runningRuns} running</div>
+          </div>
+        </div>
+
+        <div class="bento-cell bento-orange">
+          <div class="bento-value-group">
+            <div class="bento-value">${a.totals.errorRuns}</div>
+            <div class="bento-caption">Errors</div>
+          </div>
+          ${bentoErrorList(a.recentErrors)}
+        </div>
+
+        <div class="bento-cell bento-lavender">
+          <div class="bento-value-group">
+            <div class="bento-value">${a.totals.totalDocuments}</div>
+            <div class="bento-caption">Documents analysed</div>
+            <div class="bento-subvalue">${a.totals.totalLinearTasks} Linear tasks</div>
+          </div>
+          ${bentoDocumentList(a.recentDocuments)}
+        </div>
       </div>
     </div>
   `;
@@ -672,7 +789,7 @@ function renderRunDetail() {
       <div class="panels">
         <section class="panel log-panel">
           <h3>Log</h3>
-          <div class="log">${renderLog(run.events, run.status)}</div>
+          <div class="log" data-lenis-prevent>${renderLog(run.events, run.status)}</div>
           ${run.status !== "running" && run.sessionId ? renderReplyForm() : ""}
         </section>
 
@@ -866,6 +983,21 @@ function renderAccountsView() {
                 </div>
               `;
             }
+            if (a.configOnly) {
+              return `
+                <div class="account-card">
+                  <div class="account-card-header">
+                    <strong>${escapeHtml(a.label)}</strong>
+                    <span class="status-badge ${a.connected ? "success" : "running"}">${a.connected ? "Connected" : "Not connected"}</span>
+                  </div>
+                  ${
+                    a.connected
+                      ? `<p class="account-reason">Managed via ZERNIO_API_KEY in .env — remove it and restart to disconnect.</p>`
+                      : `<p class="account-reason">${escapeHtml(a.configHint)}</p><a class="connect-btn" href="${a.signupUrl}" target="_blank" rel="noopener">Get an API key</a>`
+                  }
+                </div>
+              `;
+            }
             return `
               <div class="account-card">
                 <div class="account-card-header">
@@ -902,6 +1034,14 @@ function attachHandlers() {
   });
 
   document.querySelectorAll(".doc-item").forEach((li) => {
+    li.addEventListener("click", () => openDocument(li.dataset.docId));
+  });
+
+  document.querySelectorAll(".bento-detail-item[data-run-id]").forEach((li) => {
+    li.addEventListener("click", () => selectRun(li.dataset.runId));
+  });
+
+  document.querySelectorAll(".bento-detail-item[data-doc-id]").forEach((li) => {
     li.addEventListener("click", () => openDocument(li.dataset.docId));
   });
 
