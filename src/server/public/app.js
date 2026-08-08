@@ -230,6 +230,23 @@ function closeConfirmModal() {
   render();
 }
 
+function renderConfirmModal() {
+  const m = state.confirmModal;
+  if (!m) return "";
+  return `
+    <div class="confirm-backdrop" id="confirm-backdrop">
+      <div class="confirm-modal" role="alertdialog" aria-modal="true" aria-labelledby="confirm-modal-title">
+        <h3 id="confirm-modal-title">${escapeHtml(m.title)}</h3>
+        <p class="confirm-modal-message">${escapeHtml(m.message)}</p>
+        <div class="confirm-modal-actions">
+          <button type="button" class="confirm-btn confirm-btn-cancel" id="confirm-modal-cancel">Cancel</button>
+          <button type="button" class="confirm-btn ${m.danger ? "confirm-btn-danger" : "confirm-btn-primary"}" id="confirm-modal-confirm">${escapeHtml(m.confirmLabel)}</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 async function loadDocumentsForCurrentView() {
   if (state.view.type === "department") {
     state.documents = await fetchJSON(`/api/documents?agentKey=${encodeURIComponent(state.view.key)}`);
@@ -458,6 +475,7 @@ function render() {
       </div>
     </div>
     <div id="nav-tooltip"></div>
+    ${renderConfirmModal()}
   `;
   attachHandlers();
   if (window.lucide) window.lucide.createIcons();
@@ -1198,6 +1216,18 @@ function attachHandlers() {
       deleteRun(btn.dataset.deleteRun);
     });
   });
+
+  if (state.confirmModal) {
+    document.getElementById("confirm-backdrop")?.addEventListener("click", (e) => {
+      if (e.target.id === "confirm-backdrop") closeConfirmModal();
+    });
+    document.getElementById("confirm-modal-cancel")?.addEventListener("click", () => closeConfirmModal());
+    document.getElementById("confirm-modal-confirm")?.addEventListener("click", () => {
+      const onConfirm = state.confirmModal?.onConfirm;
+      closeConfirmModal();
+      onConfirm?.();
+    });
+  }
 
   document.querySelectorAll(".doc-item").forEach((li) => {
     li.addEventListener("click", () => openDocument(li.dataset.docId));

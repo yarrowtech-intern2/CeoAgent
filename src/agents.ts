@@ -44,14 +44,24 @@ function docTool(key: string) {
 // never makes it back, and for tools like create_document that means the
 // document never actually persists. This flag is a MITIGATION, not a full
 // fix: it makes backgrounding less likely but not impossible, so the failure
-// still recurs intermittently (observed ~1-in-3 in testing) even with it
-// set. There is no UX cost to setting it (this app already waits for the
-// whole run, including any backgrounded continuation, before rendering
-// "done" — see store.ts finishRun), so it's worth keeping regardless.
-// The reliable path for document-producing specialists (HR/Analysis/Sales/
-// Finance) is a DIRECT run from that department's own page, which has been
-// 100% consistent in testing — CEO delegation to them should be treated as
-// best-effort until this is root-caused further upstream.
+// can still recur even with it set. There is no UX cost to setting it (this
+// app already waits for the whole run, including any backgrounded
+// continuation, before rendering "done" — see store.ts finishRun), so it's
+// worth keeping regardless.
+//
+// Root cause (found 2026-08-08): when the SDK backgrounds a subagent/tool
+// call, the caller gets an immediate "running in the background" placeholder
+// tool_result instead of the real one, and the actual outcome is only ever
+// delivered later as a `type: "system", subtype: "task_notification"`
+// SDKMessage — a message type drainQuery() (orchestrator.ts) never read, so
+// it was dropped on the floor even though the underlying tool call itself
+// completed. drainQuery() now handles task_notification (and task_started,
+// to attribute it to the right department), surfacing the previously-lost
+// summary and re-running extractLinearTask() against it. This should make
+// CEO delegation meaningfully more reliable than the "best-effort" verdict
+// below, but hasn't been re-validated against a live 1-in-3 repro yet — the
+// direct-run path for document-producing specialists (HR/Analysis/Sales/
+// Finance) is still the fallback if delegated runs keep losing results.
 const SYNC: Pick<AgentDefinition, "background"> = { background: false };
 
 const managerAgent: AgentDefinition = {

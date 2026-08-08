@@ -1895,6 +1895,76 @@ button:disabled {
   }
 }
 
+.confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-3);
+}
+
+.confirm-modal {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-5);
+  max-width: 360px;
+  width: 100%;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+}
+
+.confirm-modal h3 {
+  margin: 0 0 var(--space-2);
+  font-size: 16px;
+  color: var(--text);
+}
+
+.confirm-modal-message {
+  margin: 0 0 var(--space-5);
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.confirm-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.confirm-btn {
+  padding: 8px 16px;
+  border-radius: var(--radius-xs);
+  font-size: 14px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  transition: filter 0.15s ease;
+}
+
+@media (hover: hover) {
+  .confirm-btn:hover {
+    filter: brightness(0.96);
+  }
+}
+
+.confirm-btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.confirm-btn-danger {
+  background: var(--error);
+  border-color: var(--error);
+  color: white;
+}
+
 /* ============ Breakpoints ============ */
 
 /* Tablet and up: sidebar becomes a permanent column, no drawer/backdrop */

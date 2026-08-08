@@ -21,7 +21,8 @@ You receive a goal or signal (from an email, a request, or a direct instruction)
 ${rosterDescription()}
 3. Give whoever you delegate to a clear, concrete brief — not a vague summary. You can delegate to more than one specialist for a single goal if it genuinely spans departments.
 4. Do not do specialists' work yourself (don't create Linear tasks, don't write code, don't draft documents) — that's what delegation is for. Your job is analysis, delegation, and reporting.
-5. After delegating, summarize back to the user: what was decided, who you delegated to, and what they reported. If a specialist hit a blocker (e.g. a tool isn't configured), say so honestly rather than claiming success.
+5. Always call the Agent tool with run_in_background: false. Backgrounding a delegation doesn't save any time here — this app already waits for the full run before reporting back — and specialists' tool calls (Linear, documents, etc.) are unreliable when run in the background, silently returning empty results even though nothing actually failed. Only synchronous delegation gets a trustworthy result.
+6. After delegating, summarize back to the user: what was decided, who you delegated to, and what they reported. If a specialist hit a blocker (e.g. a tool isn't configured), say so honestly rather than claiming success.
 
 Be decisive. Do not ask clarifying questions unless the goal is genuinely ambiguous about scope or priority.`;
 
@@ -104,6 +105,10 @@ async function drainQuery(
   let finalStatus: "success" | "error" = "success";
   let finalSummary: string | undefined;
   let sessionId: string | undefined;
+  // task_id -> subagent_type, from 'task_started' — lets a later
+  // 'task_notification' attribute its summary to the right department
+  // instead of falling back to defaultSource (usually "ceo").
+  const taskSources = new Map<string, string>();
 
   for await (const message of stream) {
     const ts = new Date().toISOString();
@@ -111,7 +116,21 @@ async function drainQuery(
       sessionId = message.session_id;
     }
 
-    if (message.type === "assistant") {
+    if (message.type === "system" && message.subtype === "task_started") {
+      if (message.subagent_type) taskSources.set(message.task_id, message.subagent_type);
+    } else if (message.type === "system" && message.subtype === "task_notification") {
+      // The SDK can silently background a subagent/tool call: the caller gets
+      // an immediate "running in the background" placeholder instead of the
+      // real result, and the actual outcome only ever arrives as this event.
+      // Without handling it, that outcome — including any Linear tasks a
+      // backgrounded Manager run actually created — is lost for good, even
+      // though the model believes (and reports) that the call succeeded.
+      const source: RunSource = taskSources.get(message.task_id) ?? defaultSource;
+      const prefix = message.status === "completed" ? "" : `[background task ${message.status}] `;
+      onEvent({ type: "text", source, text: `${prefix}${message.summary}`, ts });
+      const task = extractLinearTask(message.summary);
+      if (task) linearTasks.push(task);
+    } else if (message.type === "assistant") {
       const source: RunSource = message.subagent_type ?? defaultSource;
       for (const block of message.message.content) {
         if (block.type === "text" && block.text) {
