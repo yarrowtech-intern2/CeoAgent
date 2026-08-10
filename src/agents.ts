@@ -5,6 +5,7 @@ import { GMAIL_TOOLS, isGmailConnected } from "./tools/gmail.js";
 import { LINKEDIN_TOOLS, isLinkedinConnected } from "./tools/linkedin.js";
 import { ZERNIO_TOOLS, isZernioConnected } from "./tools/zernio.js";
 import { INSTAGRAM_TOOLS, isInstagramConnected } from "./tools/instagram.js";
+import { N8N_TOOLS, isN8nConnected } from "./tools/n8n.js";
 
 export interface DepartmentMeta {
   key: string;
@@ -74,9 +75,9 @@ When given an initiative or task from the CEO:
 2. For each sub-task, create a Linear task with a clear title and a description that includes acceptance criteria.
 3. Check existing tasks first with list_linear_tasks if the initiative might overlap with in-flight work, to avoid duplicates.
 4. Reply with a short summary: what tasks you created (with their Linear identifiers), and any open questions or risks the CEO should know about.
-
+${isN8nConnected() ? "5. If it fits the initiative (e.g. notifying a team once tasks are created), you may trigger an n8n workflow via trigger_n8n_workflow — check list_n8n_workflows first, and only ever use a name that tool actually lists.\n" : ""}
 Be concrete. Do not create vague tasks like "look into X" — specify what "done" looks like.`,
-  tools: LINEAR_TOOLS,
+  tools: [...LINEAR_TOOLS, ...(isN8nConnected() ? N8N_TOOLS : [])],
   ...SYNC,
 };
 

@@ -4,6 +4,7 @@ import { gmailServer, GMAIL_TOOLS, isGmailConnected } from "./tools/gmail.js";
 import { instagramServer, INSTAGRAM_TOOLS, isInstagramConnected } from "./tools/instagram.js";
 import { linkedinServer, LINKEDIN_TOOLS, isLinkedinConnected } from "./tools/linkedin.js";
 import { zernioServer, ZERNIO_TOOLS, isZernioConnected } from "./tools/zernio.js";
+import { n8nServer, N8N_TOOLS, isN8nConnected } from "./tools/n8n.js";
 import { DEPARTMENTS, buildAgentsRegistry, documentsServer, allSpecialistToolNames } from "./agents.js";
 import { WORKSPACE_DIR } from "./workspace.js";
 
@@ -22,7 +23,8 @@ ${rosterDescription()}
 3. Give whoever you delegate to a clear, concrete brief — not a vague summary. You can delegate to more than one specialist for a single goal if it genuinely spans departments.
 4. Do not do specialists' work yourself (don't create Linear tasks, don't write code, don't draft documents) — that's what delegation is for. Your job is analysis, delegation, and reporting.
 5. Always call the Agent tool with run_in_background: false. Backgrounding a delegation doesn't save any time here — this app already waits for the full run before reporting back — and specialists' tool calls (Linear, documents, etc.) are unreliable when run in the background, silently returning empty results even though nothing actually failed. Only synchronous delegation gets a trustworthy result.
-6. After delegating, summarize back to the user: what was decided, who you delegated to, and what they reported. If a specialist hit a blocker (e.g. a tool isn't configured), say so honestly rather than claiming success.
+6. If n8n workflow tools are available, you (not a specialist) are the one who triggers cross-cutting automations (e.g. notifying a channel, updating an external system) once delegated work is done — check list_n8n_workflows for what's available before assuming one exists. Don't invent a workflow name; only ever trigger ones that tool actually lists.
+7. After delegating (and triggering any relevant automation), summarize back to the user: what was decided, who you delegated to, and what they reported. If a specialist hit a blocker (e.g. a tool isn't configured), say so honestly rather than claiming success.
 
 Be decisive. Do not ask clarifying questions unless the goal is genuinely ambiguous about scope or priority.`;
 
@@ -34,6 +36,7 @@ function buildMcpServers() {
     ...(isInstagramConnected() ? { instagram: instagramServer } : {}),
     ...(isLinkedinConnected() ? { linkedin: linkedinServer } : {}),
     ...(isZernioConnected() ? { zernio: zernioServer } : {}),
+    ...(isN8nConnected() ? { n8n: n8nServer } : {}),
   };
 }
 
@@ -43,6 +46,7 @@ function allToolNames(): string[] {
   if (isInstagramConnected()) for (const t of INSTAGRAM_TOOLS) names.add(t);
   if (isLinkedinConnected()) for (const t of LINKEDIN_TOOLS) names.add(t);
   if (isZernioConnected()) for (const t of ZERNIO_TOOLS) names.add(t);
+  if (isN8nConnected()) for (const t of N8N_TOOLS) names.add(t);
   return [...names];
 }
 
