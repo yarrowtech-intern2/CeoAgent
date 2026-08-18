@@ -4,6 +4,7 @@ import { gmailServer, GMAIL_TOOLS, isGmailConnected } from "./tools/gmail.js";
 import { instagramServer, INSTAGRAM_TOOLS, isInstagramConnected } from "./tools/instagram.js";
 import { linkedinServer, LINKEDIN_TOOLS, isLinkedinConnected } from "./tools/linkedin.js";
 import { zernioServer, ZERNIO_TOOLS, isZernioConnected } from "./tools/zernio.js";
+import { whatsappServer, WHATSAPP_TOOLS, isWhatsappConnected } from "./tools/whatsapp.js";
 import { n8nServer, N8N_TOOLS, isN8nConnected } from "./tools/n8n.js";
 import { DEPARTMENTS, buildAgentsRegistry, documentsServer, allSpecialistToolNames } from "./agents.js";
 import { WORKSPACE_DIR } from "./workspace.js";
@@ -36,6 +37,7 @@ function buildMcpServers() {
     ...(isInstagramConnected() ? { instagram: instagramServer } : {}),
     ...(isLinkedinConnected() ? { linkedin: linkedinServer } : {}),
     ...(isZernioConnected() ? { zernio: zernioServer } : {}),
+    ...(isWhatsappConnected() ? { whatsapp: whatsappServer } : {}),
     ...(isN8nConnected() ? { n8n: n8nServer } : {}),
   };
 }
@@ -46,6 +48,7 @@ function allToolNames(): string[] {
   if (isInstagramConnected()) for (const t of INSTAGRAM_TOOLS) names.add(t);
   if (isLinkedinConnected()) for (const t of LINKEDIN_TOOLS) names.add(t);
   if (isZernioConnected()) for (const t of ZERNIO_TOOLS) names.add(t);
+  if (isWhatsappConnected()) for (const t of WHATSAPP_TOOLS) names.add(t);
   if (isN8nConnected()) for (const t of N8N_TOOLS) names.add(t);
   return [...names];
 }

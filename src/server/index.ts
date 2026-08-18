@@ -27,6 +27,7 @@ import {
   disconnectLinkedin,
 } from "../tools/linkedin.js";
 import { isZernioConnected } from "../tools/zernio.js";
+import { isWhatsappConnected } from "../tools/whatsapp.js";
 import {
   createRun,
   appendEvent,
@@ -432,6 +433,14 @@ app.get("/api/accounts", (_req, res) => {
       configOnly: true,
       configHint: "Set ZERNIO_API_KEY in your .env file, then restart the server. Get a key at zernio.com → Settings → API Keys, and link platform accounts from Zernio's own dashboard.",
       signupUrl: "https://zernio.com",
+    },
+    {
+      key: "whatsapp",
+      label: "WhatsApp (direct)",
+      connected: isWhatsappConnected(),
+      configOnly: true,
+      configHint: "Set WHATSAPP_ACCESS_TOKEN, WHATSAPP_PHONE_NUMBER_ID, and WHATSAPP_BUSINESS_ACCOUNT_ID in your .env file, then restart the server. Generate a permanent System User token for the WABA in Meta Business Suite → Business Settings → System Users.",
+      signupUrl: "https://business.facebook.com/settings",
     },
   ]);
 });

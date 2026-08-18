@@ -99,12 +99,17 @@ const listZernioConversations = tool(
       const errText = await res.text();
       return { content: [{ type: "text" as const, text: `Error: ${res.status} ${errText}` }], isError: true };
     }
-    const json = (await res.json()) as { conversations?: Array<{ _id: string; platform?: string; lastMessage?: string }> };
-    const conversations = json.conversations ?? [];
+    const json = (await res.json()) as {
+      data?: Array<{ id: string; accountId: string; platform?: string; participantUsername?: string; participantName?: string; lastMessage?: string }>;
+    };
+    const conversations = json.data ?? [];
     if (!conversations.length) {
       return { content: [{ type: "text" as const, text: "No conversations found." }] };
     }
-    const lines = conversations.map((c) => `- [${c._id}] ${c.platform ?? ""}: ${(c.lastMessage ?? "").slice(0, 140)}`);
+    const lines = conversations.map(
+      (c) =>
+        `- [${c.id}] ${c.platform ?? ""} account ${c.accountId} with ${c.participantUsername ?? c.participantName ?? "unknown"}: ${(c.lastMessage ?? "").slice(0, 140)}`,
+    );
     return { content: [{ type: "text" as const, text: lines.join("\n") }] };
   },
 );
