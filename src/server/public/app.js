@@ -5,6 +5,7 @@ const state = {
   theme: "light", // "light" | "dark" — set for real in initTheme() before first render
   departments: [],
   accounts: [],
+  settings: [], // MaskedField[] from /api/settings — loaded when the Settings view is active
   runs: [],
   showArchived: false, // toggles the sidebar's Tasks lists between active and archived runs
   selectedRunId: null,
@@ -19,6 +20,23 @@ const state = {
   attaching: false, // true while an upload is being parsed server-side
   attachError: null, // error message from a failed upload, cleared on next attempt
   confirmModal: null, // { title, message, confirmLabel, danger, onConfirm } | null
+  schedules: [], // ScheduleRecord[] from /api/schedule — loaded when the Calendar department view is active
+  calendarView: "week", // "week" | "month" — which main panel renderCalendarView() shows
+  calendarCursor: null, // Date (first-of-month currently displayed by the mini calendar / month panel) — lazily set on first render
+  calendarWeekCursor: null, // Date (any day within the week shown by the week grid) — lazily set to this week on first render
+  calendarSelectedDate: null, // "YYYY-MM-DD" | null — drives the detail panel; lazily set to today on first render
+  calendarStatusFilter: "all", // "all" | "active" | "disabled" — filters which schedules render everywhere in the calendar view
+  calendarRangeMode: false, // when true, two clicks pick a date range instead of one click just selecting a date
+  calendarPendingStart: null, // "YYYY-MM-DD" | null — first click of a range, while awaiting the second
+  scheduleModal: null, // draft object | null — see openScheduleModal()/openEditScheduleModal()
+  filesChildren: new Map(), // virtual path ("" = roots) -> FileEntry[] already fetched, so re-expanding a folder is instant
+  filesExpanded: new Set(), // virtual paths of folders currently expanded in the tree
+  filesSelectedPath: null, // virtual path of the selected file/folder, or null
+  filesSelectedEntry: null, // the FileEntry for filesSelectedPath
+  filesPreview: null, // { kind: "text"|"image"|"pdf"|"none", ... } | "loading" | null — see loadFilePreview()
+  filesUploadTarget: null, // virtual path the next Upload click saves into (defaults to the selected/open folder)
+  filesUploading: false,
+  filesError: null,
 };
 
 let eventSource = null;
@@ -26,8 +44,17 @@ let lastRenderKey = null;
 
 const NAV_STATIC = {
   overview: { key: "overview", label: "Overview", icon: "pie-chart" },
+  files: { key: "files", label: "Files", icon: "folder" },
   accounts: { key: "accounts", label: "Accounts", icon: "plug-zap" },
+  settings: { key: "settings", label: "Settings", icon: "settings" },
 };
+
+// Shared by render() and renderNav() — Accounts/Files/Settings are full-width
+// utility pages with no goal composer or run history, unlike Overview/a
+// department.
+function isFullWidthView(viewType) {
+  return viewType === "accounts" || viewType === "files" || viewType === "settings";
+}
 
 // ---------- Helpers ----------
 
@@ -47,6 +74,79 @@ function formatTime(iso) {
 
 function formatClock(iso) {
   return iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+}
+
+// Local-date (not UTC) YYYY-MM-DD, matching what the server's scheduler
+// compares against — Date#toISOString would shift near midnight in
+// timezones behind UTC and silently pick the wrong day.
+function ymd(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function parseYmd(str) {
+  const [y, m, d] = str.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
+const WEEKDAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function describeRecurrence(r) {
+  if (r.type === "once") return `once on ${r.date}`;
+  const range = `${r.startDate}${r.endDate ? ` to ${r.endDate}` : " onward"}`;
+  if (r.type === "daily") return `daily, ${range}`;
+  return `weekly on ${r.weekdays.map((d) => WEEKDAY_NAMES[d]).join("/")}, ${range}`;
+}
+
+// Whether a recurrence covers a given calendar day — mirrors scheduler.ts's
+// isDueToday (minus the time-of-day check, which only matters for firing,
+// not for which cells get a dot).
+function scheduleActiveOn(schedule, dateStr, dateObj) {
+  const r = schedule.recurrence;
+  if (r.type === "once") return r.date === dateStr;
+  if (dateStr < r.startDate) return false;
+  if (r.endDate && dateStr > r.endDate) return false;
+  if (r.type === "daily") return true;
+  return r.weekdays.includes(dateObj.getDay());
+}
+
+function scheduleAgentColor(agentKey) {
+  if (agentKey === "ceo") return "var(--accent)";
+  return deptColor(agentKey) || "var(--accent)";
+}
+
+function matchesStatusFilter(schedule) {
+  if (state.calendarStatusFilter === "active") return schedule.enabled;
+  if (state.calendarStatusFilter === "disabled") return !schedule.enabled;
+  return true;
+}
+
+function filteredSchedules() {
+  return state.schedules.filter(matchesStatusFilter);
+}
+
+/** Monday of the week containing `date` (reference calendar's week starts Monday, not Sunday). */
+function mondayOf(date) {
+  const day = date.getDay(); // 0=Sun..6=Sat
+  const diff = day === 0 ? -6 : 1 - day;
+  const monday = new Date(date.getFullYear(), date.getMonth(), date.getDate() + diff);
+  return monday;
+}
+
+function weekDates(monday) {
+  return Array.from({ length: 7 }, (_, i) => new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i));
+}
+
+function scheduleHour(schedule) {
+  return Number(schedule.time.split(":")[0]);
+}
+
+function scheduleMinute(schedule) {
+  return Number(schedule.time.split(":")[1]);
+}
+
+function formatHourLabel(hour) {
+  const h = ((hour + 11) % 12) + 1;
+  return `${h} ${hour < 12 || hour === 24 ? "AM" : "PM"}`;
 }
 
 function capitalize(s) {
@@ -135,7 +235,9 @@ function toggleTheme() {
 
 function viewLabel() {
   if (state.view.type === "overview") return NAV_STATIC.overview.label;
+  if (state.view.type === "files") return NAV_STATIC.files.label;
   if (state.view.type === "accounts") return NAV_STATIC.accounts.label;
+  if (state.view.type === "settings") return NAV_STATIC.settings.label;
   return departmentMeta(state.view.key)?.label ?? state.view.key;
 }
 
@@ -147,6 +249,10 @@ async function loadDepartments() {
 
 async function loadAccounts() {
   state.accounts = await fetchJSON("/api/accounts");
+}
+
+async function loadSettings() {
+  state.settings = await fetchJSON("/api/settings");
 }
 
 async function loadAnalytics() {
@@ -255,6 +361,138 @@ async function loadDocumentsForCurrentView() {
   }
 }
 
+async function loadSchedules() {
+  state.schedules = await fetchJSON("/api/schedule");
+}
+
+// ---------- Files view ----------
+
+async function loadFilesDir(virtualPath) {
+  const data = await fetchJSON(`/api/files/list?path=${encodeURIComponent(virtualPath)}`);
+  state.filesChildren.set(virtualPath, data.entries);
+  return data.entries;
+}
+
+async function loadFilesRoot() {
+  state.filesError = null;
+  try {
+    await loadFilesDir("");
+  } catch (err) {
+    state.filesError = err instanceof Error ? err.message : String(err);
+  }
+}
+
+const TEXT_PREVIEW_EXTENSIONS = new Set([
+  ".md", ".txt", ".csv", ".json", ".js", ".ts", ".html", ".css", ".log", ".yml", ".yaml",
+]);
+const IMAGE_PREVIEW_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"]);
+const MAX_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024;
+
+function extOf(name) {
+  const dot = name.lastIndexOf(".");
+  return dot >= 0 ? name.slice(dot).toLowerCase() : "";
+}
+
+function fileIconFor(name) {
+  const ext = extOf(name);
+  if (IMAGE_PREVIEW_EXTENSIONS.has(ext)) return "image";
+  if (ext === ".pdf") return "file-text";
+  if ([".xlsx", ".xls", ".csv"].includes(ext)) return "file-spreadsheet";
+  if ([".doc", ".docx"].includes(ext)) return "file-text";
+  if ([".ppt", ".pptx"].includes(ext)) return "presentation";
+  if (TEXT_PREVIEW_EXTENSIONS.has(ext)) return "file-text";
+  return "file";
+}
+
+async function toggleFilesFolder(path) {
+  if (state.filesExpanded.has(path)) {
+    state.filesExpanded.delete(path);
+    render();
+    return;
+  }
+  state.filesExpanded.add(path);
+  render();
+  if (!state.filesChildren.has(path)) {
+    try {
+      await loadFilesDir(path);
+    } catch (err) {
+      state.filesError = err instanceof Error ? err.message : String(err);
+    }
+    render();
+  }
+}
+
+async function selectFilesEntry(entry) {
+  state.filesSelectedPath = entry.path;
+  state.filesSelectedEntry = entry;
+  state.filesError = null;
+  if (entry.type === "dir") {
+    state.filesUploadTarget = entry.path;
+    state.filesPreview = null;
+    await toggleFilesFolder(entry.path);
+    return;
+  }
+  // A file's own folder is where "Upload" should land next, not the file itself.
+  state.filesUploadTarget = entry.path.split("/").slice(0, -1).join("/");
+  state.filesPreview = "loading";
+  render();
+  await loadFilePreview(entry);
+}
+
+async function loadFilePreview(entry) {
+  const ext = extOf(entry.name);
+  try {
+    if (IMAGE_PREVIEW_EXTENSIONS.has(ext)) {
+      state.filesPreview = { kind: "image", url: `/api/files/raw?path=${encodeURIComponent(entry.path)}` };
+    } else if (ext === ".pdf") {
+      state.filesPreview = { kind: "pdf", url: `/api/files/raw?path=${encodeURIComponent(entry.path)}` };
+    } else if (TEXT_PREVIEW_EXTENSIONS.has(ext) && (entry.size ?? 0) <= MAX_TEXT_PREVIEW_BYTES) {
+      const res = await fetch(`/api/files/raw?path=${encodeURIComponent(entry.path)}`);
+      const text = await res.text();
+      state.filesPreview = { kind: ext === ".md" ? "markdown" : "text", text };
+    } else {
+      state.filesPreview = { kind: "none" };
+    }
+  } catch (err) {
+    state.filesPreview = { kind: "none" };
+    state.filesError = err instanceof Error ? err.message : String(err);
+  }
+  render();
+}
+
+function formatFileSize(bytes) {
+  if (bytes == null) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function uploadFilesToTarget(fileList) {
+  const target = state.filesUploadTarget || state.filesSelectedPath;
+  if (!target || !fileList?.length) return;
+  state.filesUploading = true;
+  state.filesError = null;
+  render();
+  try {
+    const formData = new FormData();
+    formData.append("path", target);
+    for (const file of fileList) formData.append("files", file);
+    const res = await fetch("/api/files/upload", { method: "POST", body: formData });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || `upload failed (${res.status})`);
+    }
+    state.filesChildren.delete(target);
+    state.filesExpanded.add(target);
+    await loadFilesDir(target);
+  } catch (err) {
+    state.filesError = err instanceof Error ? err.message : String(err);
+  } finally {
+    state.filesUploading = false;
+    render();
+  }
+}
+
 // ---------- View switching ----------
 
 async function switchView(view) {
@@ -268,9 +506,14 @@ async function switchView(view) {
   state.liveLinearTasks = [];
   state.sidebarOpen = false;
   state.showArchived = false;
+  state.calendarPendingStart = null;
+  state.scheduleModal = null;
   render();
   const loaders = [loadRunsForCurrentView(), loadDocumentsForCurrentView()];
   if (view.type === "overview") loaders.push(loadAnalytics());
+  if (view.type === "department" && view.key === "calendar") loaders.push(loadSchedules());
+  if (view.type === "files") loaders.push(loadFilesRoot());
+  if (view.type === "settings") loaders.push(loadSettings());
   await Promise.all(loaders);
 
   // A department page with real run history but nothing selected used to
@@ -429,6 +672,256 @@ async function disconnectAccount(key) {
   render();
 }
 
+// ---------- Calendar / scheduled automations ----------
+
+// Lazily initializes the three pieces of "where are we looking" state to
+// today, once — separate from state.scheduleModal (what's being created/
+// edited) and state.calendarPendingStart (an in-progress range selection).
+function ensureCalendarState() {
+  if (!state.calendarCursor) {
+    const now = new Date();
+    state.calendarCursor = new Date(now.getFullYear(), now.getMonth(), 1);
+  }
+  if (!state.calendarWeekCursor) {
+    state.calendarWeekCursor = mondayOf(new Date());
+  }
+  if (!state.calendarSelectedDate) {
+    state.calendarSelectedDate = ymd(new Date());
+  }
+}
+
+function shiftCalendarMonth(delta) {
+  ensureCalendarState();
+  state.calendarCursor = new Date(state.calendarCursor.getFullYear(), state.calendarCursor.getMonth() + delta, 1);
+  render();
+}
+
+function shiftCalendarWeek(delta) {
+  ensureCalendarState();
+  const monday = state.calendarWeekCursor;
+  state.calendarWeekCursor = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + delta * 7);
+  render();
+}
+
+function goToToday() {
+  const now = new Date();
+  state.calendarCursor = new Date(now.getFullYear(), now.getMonth(), 1);
+  state.calendarWeekCursor = mondayOf(now);
+  state.calendarSelectedDate = ymd(now);
+  render();
+}
+
+function setCalendarView(view) {
+  state.calendarView = view;
+  render();
+}
+
+function setCalendarStatusFilter(filter) {
+  state.calendarStatusFilter = filter;
+  render();
+}
+
+function toggleCalendarRangeMode() {
+  state.calendarRangeMode = !state.calendarRangeMode;
+  state.calendarPendingStart = null;
+  render();
+}
+
+function clearCalendarSelection() {
+  state.calendarPendingStart = null;
+  render();
+}
+
+// Shared by every clickable date cell (mini calendar and the big month
+// grid): a plain click just selects the date (drives the detail panel and
+// jumps the week grid to that date's week) — it never opens the create
+// modal by surprise. Creating happens explicitly via the toolbar's "+"
+// button, the detail panel's "+" button, or completing a 2-click range
+// selection, which is unambiguously an intent to create.
+function selectCalendarDate(dateStr) {
+  if (state.calendarRangeMode) {
+    if (!state.calendarPendingStart) {
+      state.calendarPendingStart = dateStr;
+      render();
+      return;
+    }
+    const start = state.calendarPendingStart < dateStr ? state.calendarPendingStart : dateStr;
+    const end = state.calendarPendingStart < dateStr ? dateStr : state.calendarPendingStart;
+    state.calendarPendingStart = null;
+    openScheduleModal(start, end);
+    return;
+  }
+  state.calendarSelectedDate = dateStr;
+  state.calendarWeekCursor = mondayOf(parseYmd(dateStr));
+  render();
+}
+
+function defaultScheduleAgentKey() {
+  return state.departments.find((d) => d.key !== "calendar")?.key ?? state.departments[0]?.key ?? "ceo";
+}
+
+function openScheduleModal(start, end) {
+  const isRange = start !== end;
+  state.scheduleModal = {
+    id: null,
+    label: "",
+    goal: "",
+    agentKey: defaultScheduleAgentKey(),
+    time: "09:00",
+    recurrenceType: isRange ? "daily" : "once",
+    date: start,
+    startDate: start,
+    endDate: end,
+    weekdays: [],
+    submitting: false,
+    error: null,
+  };
+  render();
+}
+
+// Opens the same modal pre-filled from an existing ScheduleRecord, so
+// clicking an automation (in the week grid or the detail panel) edits it
+// in place rather than only offering toggle/delete from a list.
+function openEditScheduleModal(schedule) {
+  const r = schedule.recurrence;
+  state.scheduleModal = {
+    id: schedule.id,
+    label: schedule.label,
+    goal: schedule.goal,
+    agentKey: schedule.agentKey,
+    time: schedule.time,
+    recurrenceType: r.type,
+    date: r.type === "once" ? r.date : "",
+    startDate: r.type !== "once" ? r.startDate : "",
+    endDate: r.type !== "once" ? (r.endDate ?? "") : "",
+    weekdays: r.type === "weekly" ? r.weekdays : [],
+    submitting: false,
+    error: null,
+  };
+  render();
+}
+
+function closeScheduleModal() {
+  state.scheduleModal = null;
+  render();
+}
+
+// Reads the live form values back into state.scheduleModal before a
+// recurrence-type change forces a re-render — render() rebuilds the whole
+// modal from state, and without this, whatever the user had already typed
+// into label/goal/etc. would be silently discarded by that rebuild.
+function syncScheduleModalFromForm() {
+  const form = document.getElementById("schedule-form");
+  if (!form || !state.scheduleModal) return;
+  const weekdays = [...form.querySelectorAll('input[name="weekday"]:checked')].map((cb) => Number(cb.value));
+  Object.assign(state.scheduleModal, {
+    label: form.label.value,
+    goal: form.goal.value,
+    agentKey: form.agentKey.value,
+    time: form.time.value,
+    date: form.date ? form.date.value : state.scheduleModal.date,
+    startDate: form.startDate ? form.startDate.value : state.scheduleModal.startDate,
+    endDate: form.endDate ? form.endDate.value : state.scheduleModal.endDate,
+    weekdays,
+  });
+}
+
+function changeScheduleRecurrenceType(type) {
+  syncScheduleModalFromForm();
+  state.scheduleModal.recurrenceType = type;
+  render();
+}
+
+function buildRecurrenceFromModal(m) {
+  if (m.recurrenceType === "once") return { type: "once", date: m.date };
+  if (m.recurrenceType === "daily") return { type: "daily", startDate: m.startDate, endDate: m.endDate || undefined };
+  return { type: "weekly", weekdays: m.weekdays, startDate: m.startDate, endDate: m.endDate || undefined };
+}
+
+async function submitScheduleModal() {
+  syncScheduleModalFromForm();
+  const m = state.scheduleModal;
+  if (!m.label.trim() || !m.goal.trim() || !m.time) {
+    m.error = "Label, goal, and time are all required.";
+    render();
+    return;
+  }
+  if (m.recurrenceType === "once" && !m.date) {
+    m.error = "Pick a date.";
+    render();
+    return;
+  }
+  if (m.recurrenceType !== "once" && !m.startDate) {
+    m.error = "Pick a start date.";
+    render();
+    return;
+  }
+  if (m.recurrenceType === "weekly" && m.weekdays.length === 0) {
+    m.error = "Pick at least one weekday.";
+    render();
+    return;
+  }
+  m.error = null;
+  m.submitting = true;
+  render();
+  const body = {
+    label: m.label.trim(),
+    goal: m.goal.trim(),
+    agentKey: m.agentKey,
+    time: m.time,
+    recurrence: buildRecurrenceFromModal(m),
+  };
+  try {
+    if (m.id) {
+      await fetchJSON(`/api/schedule/${m.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } else {
+      await fetchJSON("/api/schedule", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    }
+    await loadSchedules();
+    state.scheduleModal = null;
+    render();
+  } catch (err) {
+    m.submitting = false;
+    m.error = err instanceof Error ? err.message : String(err);
+    render();
+  }
+}
+
+async function toggleSchedule(id, enabled) {
+  await fetchJSON(`/api/schedule/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  await loadSchedules();
+  render();
+}
+
+function deleteSchedule(id) {
+  openConfirmModal({
+    title: "Delete this automation?",
+    message: "It will stop running and its schedule will be permanently removed. This can't be undone.",
+    confirmLabel: "Delete",
+    danger: true,
+    onConfirm: () => performDeleteSchedule(id),
+  });
+}
+
+async function performDeleteSchedule(id) {
+  await fetchJSON(`/api/schedule/${id}`, { method: "DELETE" });
+  if (state.scheduleModal?.id === id) state.scheduleModal = null;
+  await loadSchedules();
+  render();
+}
+
 // Toggle/close the mobile drawer by mutating the existing nodes rather than
 // calling render() — a full re-render replaces the sidebar element outright,
 // which would skip the CSS slide transition (a brand-new node has no prior
@@ -460,7 +953,7 @@ function render() {
     : true;
   const prevScrollTop = prevLog?.scrollTop ?? 0;
 
-  const showSidebar = state.view.type !== "accounts";
+  const showSidebar = !isFullWidthView(state.view.type);
   const mobile = isMobileLayout();
   app.innerHTML = `
     <div class="layout">
@@ -586,8 +1079,10 @@ function navButton(key, label, icon, isActive, viewObj, accentColor) {
 
 function renderNav() {
   const isOverview = state.view.type === "overview";
+  const isFiles = state.view.type === "files";
   const isAccounts = state.view.type === "accounts";
-  const showSidebar = state.view.type !== "accounts";
+  const isSettings = state.view.type === "settings";
+  const showSidebar = !isFullWidthView(state.view.type);
 
   const deptButtons = state.departments
     .map((d) =>
@@ -613,10 +1108,12 @@ function renderNav() {
       }
       <div class="nav-scroll">
         ${navButton("overview", NAV_STATIC.overview.label, NAV_STATIC.overview.icon, isOverview, { type: "overview" })}
+        ${navButton("files", NAV_STATIC.files.label, NAV_STATIC.files.icon, isFiles, { type: "files" })}
         ${deptButtons}
       </div>
       <div class="nav-divider"></div>
       ${navButton("accounts", NAV_STATIC.accounts.label, NAV_STATIC.accounts.icon, isAccounts, { type: "accounts" })}
+      ${navButton("settings", NAV_STATIC.settings.label, NAV_STATIC.settings.icon, isSettings, { type: "settings" })}
       <button class="nav-icon" id="theme-toggle" data-label="${state.theme === "dark" ? "Light mode" : "Dark mode"}">
         <i data-lucide="${state.theme === "dark" ? "sun" : "moon"}"></i>
       </button>
@@ -752,8 +1249,11 @@ function renderSidebar(mobile) {
 
 function renderMain() {
   if (state.view.type === "accounts") return renderAccountsView();
+  if (state.view.type === "files") return renderFilesView();
+  if (state.view.type === "settings") return renderSettingsView();
   if (!state.selectedRun) {
     if (state.view.type === "overview") return renderOverviewDashboard();
+    if (state.view.type === "department" && state.view.key === "calendar") return renderCalendarView();
     return `<div class="empty-state"><p>Submit a goal to start, or pick a past run from the history.</p></div>`;
   }
   return renderRunDetail();
@@ -1152,7 +1652,7 @@ function renderAccountsView() {
                   </div>
                   ${
                     a.connected
-                      ? `<p class="account-reason">Managed via ZERNIO_API_KEY in .env — remove it and restart to disconnect.</p>`
+                      ? `<p class="account-reason">Managed from the Settings screen — clear the key there to disconnect.</p>`
                       : `<p class="account-reason">${escapeHtml(a.configHint)}</p><a class="connect-btn" href="${a.signupUrl}" target="_blank" rel="noopener">Get an API key</a>`
                   }
                 </div>
@@ -1173,6 +1673,588 @@ function renderAccountsView() {
             `;
           })
           .join("")}
+      </div>
+    </div>
+  `;
+}
+
+// ---------- Settings view ----------
+//
+// Replaces hand-editing .env for packaged installs. Fields never show a
+// saved value — only a masked placeholder plus a "Set" badge — so the form
+// can safely POST just the fields the user actually typed into, without ever
+// re-sending (or blanking out) an already-saved secret.
+
+function renderSettingsView() {
+  const groups = new Map();
+  for (const field of state.settings) {
+    if (!groups.has(field.group)) groups.set(field.group, []);
+    groups.get(field.group).push(field);
+  }
+
+  return `
+    <div class="settings-view">
+      <h2>Settings</h2>
+      <p class="dept-tagline">API keys and credentials for connected services. Saved values are never displayed again — only whether a key is currently set.</p>
+      <form id="settings-form">
+        ${[...groups.entries()]
+          .map(
+            ([group, fields]) => `
+              <div class="settings-group">
+                <h3>${escapeHtml(group)}</h3>
+                ${fields
+                  .map(
+                    (f) => `
+                      <label class="settings-field">
+                        <span class="settings-field-label">
+                          ${escapeHtml(f.label)}
+                          ${f.isSet ? `<span class="status-badge success">Set</span>` : ""}
+                        </span>
+                        <input type="text" name="${escapeHtml(f.envVar)}" placeholder="${f.isSet ? escapeHtml(f.masked) : "Not set"}" autocomplete="off" spellcheck="false" />
+                      </label>
+                    `,
+                  )
+                  .join("")}
+              </div>
+            `,
+          )
+          .join("")}
+        <div class="settings-actions">
+          <button type="submit" class="ai-button">Save</button>
+        </div>
+      </form>
+    </div>
+  `;
+}
+
+async function saveSettings(form) {
+  const payload = {};
+  for (const [key, value] of new FormData(form).entries()) {
+    if (typeof value === "string" && value.trim() !== "") payload[key] = value.trim();
+  }
+  if (!Object.keys(payload).length) return;
+  await fetchJSON("/api/settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  await Promise.all([loadSettings(), loadAccounts()]);
+  render();
+}
+
+// ---------- Files view ----------
+//
+// A two-pane VS Code-style browser: a lazily-expanding folder tree on the
+// left (each root — Company Data / Deliverables / Agent Files — loads its
+// children only once expanded), a preview + details pane on the right.
+// Deliberately its own full-width view (no composer sidebar, like Accounts)
+// since browsing files has nothing to do with the goal composer.
+
+function renderFilesTreeNode(entry, depth) {
+  const isDir = entry.type === "dir";
+  const isExpanded = isDir && state.filesExpanded.has(entry.path);
+  const isSelected = state.filesSelectedPath === entry.path;
+  const indent = 10 + depth * 16;
+
+  const rowIcon = isDir
+    ? `<i data-lucide="${isExpanded ? "folder-open" : "folder"}"></i>`
+    : `<i data-lucide="${fileIconFor(entry.name)}"></i>`;
+
+  const chevron = isDir
+    ? `<i class="files-chevron" data-lucide="${isExpanded ? "chevron-down" : "chevron-right"}"></i>`
+    : `<span class="files-chevron"></span>`;
+
+  const row = `
+    <div class="files-row${isSelected ? " selected" : ""}" data-files-path="${escapeHtml(entry.path)}" data-files-type="${entry.type}" style="padding-left:${indent}px" title="${escapeHtml(entry.name)}">
+      ${chevron}
+      <span class="files-row-icon">${rowIcon}</span>
+      <span class="files-row-name">${escapeHtml(entry.name)}</span>
+    </div>
+  `;
+
+  if (!isDir || !isExpanded) return row;
+
+  const children = state.filesChildren.get(entry.path);
+  const childrenHtml =
+    children === undefined
+      ? `<div class="files-row files-loading" style="padding-left:${indent + 16}px">Loading…</div>`
+      : children.length === 0
+        ? `<div class="files-row files-empty-row" style="padding-left:${indent + 16}px">Empty folder</div>`
+        : children.map((c) => renderFilesTreeNode(c, depth + 1)).join("");
+
+  return row + childrenHtml;
+}
+
+function renderFilesPreview() {
+  const entry = state.filesSelectedEntry;
+  if (!entry) {
+    return `
+      <div class="files-preview-empty">
+        <i data-lucide="folder-open"></i>
+        <p>Select a folder to browse, or a file to preview it here.</p>
+      </div>
+    `;
+  }
+
+  const crumb = entry.path
+    .split("/")
+    .map((seg, i, arr) => (i === arr.length - 1 ? escapeHtml(seg) : `${escapeHtml(seg)} <span class="files-crumb-sep">/</span> `))
+    .join("");
+
+  if (entry.type === "dir") {
+    const children = state.filesChildren.get(entry.path) ?? [];
+    const count = children.length;
+    const folderCount = children.filter((c) => c.type === "dir").length;
+    const fileCount = count - folderCount;
+    return `
+      <div class="files-preview-head">
+        <div class="files-crumb">${crumb}</div>
+        <button type="button" class="files-upload-btn" id="files-upload-btn">
+          <i data-lucide="upload"></i> Upload here
+        </button>
+      </div>
+      <div class="files-preview-empty">
+        <i data-lucide="folder"></i>
+        <p>${folderCount} folder${folderCount === 1 ? "" : "s"}, ${fileCount} file${fileCount === 1 ? "" : "s"}</p>
+      </div>
+    `;
+  }
+
+  const downloadUrl = `/api/files/raw?path=${encodeURIComponent(entry.path)}&download=1`;
+  const meta = `${formatFileSize(entry.size)}${entry.modifiedAt ? ` · edited ${new Date(entry.modifiedAt).toLocaleString()}` : ""}`;
+
+  let body = `<div class="files-preview-empty"><i data-lucide="file"></i><p>Preview not available for this file type — download to view it.</p></div>`;
+  if (state.filesPreview === "loading") {
+    body = `<div class="files-preview-empty"><p>Loading preview…</p></div>`;
+  } else if (state.filesPreview?.kind === "image") {
+    body = `<div class="files-preview-media"><img src="${state.filesPreview.url}" alt="${escapeHtml(entry.name)}" /></div>`;
+  } else if (state.filesPreview?.kind === "pdf") {
+    body = `<iframe class="files-preview-frame" src="${state.filesPreview.url}" title="${escapeHtml(entry.name)}"></iframe>`;
+  } else if (state.filesPreview?.kind === "markdown") {
+    body = `<div class="files-preview-doc">${renderMarkdown(state.filesPreview.text)}</div>`;
+  } else if (state.filesPreview?.kind === "text") {
+    body = `<pre class="files-preview-text">${escapeHtml(state.filesPreview.text)}</pre>`;
+  }
+
+  return `
+    <div class="files-preview-head">
+      <div class="files-crumb">${crumb}</div>
+      <div class="files-preview-actions">
+        <button type="button" class="files-upload-btn" id="files-upload-btn">
+          <i data-lucide="upload"></i> Upload here
+        </button>
+        <a class="files-download-btn" href="${downloadUrl}"><i data-lucide="download"></i> Download</a>
+      </div>
+    </div>
+    <div class="files-preview-meta">${escapeHtml(meta)}</div>
+    <div class="files-preview-body">${body}</div>
+  `;
+}
+
+function renderFilesView() {
+  const roots = state.filesChildren.get("") ?? [];
+  return `
+    <div class="files-view">
+      <aside class="files-tree" data-lenis-prevent>
+        <div class="files-tree-head">
+          <h2>Files</h2>
+          <input type="file" id="files-upload-input" multiple hidden />
+        </div>
+        ${state.filesError ? `<div class="files-error">${escapeHtml(state.filesError)}</div>` : ""}
+        ${
+          roots.length
+            ? roots.map((r) => renderFilesTreeNode(r, 0)).join("")
+            : `<div class="files-row files-loading">Loading…</div>`
+        }
+      </aside>
+      <div class="files-preview-pane">
+        ${state.filesUploading ? `<div class="files-uploading-banner">Uploading…</div>` : ""}
+        ${renderFilesPreview()}
+      </div>
+    </div>
+  `;
+}
+
+// ---------- Calendar view ----------
+
+function formatWeekRangeLabel(monday) {
+  const sunday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 6);
+  const sameMonth = monday.getMonth() === sunday.getMonth() && monday.getFullYear() === sunday.getFullYear();
+  const startStr = monday.toLocaleDateString([], { month: "short", day: "numeric" });
+  const endStr = sunday.toLocaleDateString(
+    [],
+    sameMonth ? { day: "numeric", year: "numeric" } : { month: "short", day: "numeric", year: "numeric" },
+  );
+  return `${startStr} – ${endStr}`;
+}
+
+// Default business-hours-ish window, widened to include any schedule that
+// actually falls outside it that week — nothing is ever hidden just because
+// it fires at an unusual hour.
+function weekHourRange(days, active) {
+  let min = 7;
+  let max = 21;
+  for (const s of active) {
+    for (const d of days) {
+      const dateStr = ymd(d);
+      if (!scheduleActiveOn(s, dateStr, d)) continue;
+      const h = scheduleHour(s);
+      if (h < min) min = h;
+      if (h > max) max = h;
+    }
+  }
+  return [min, max];
+}
+
+function renderMiniCalendar() {
+  ensureCalendarState();
+  const cursor = state.calendarCursor;
+  const year = cursor.getFullYear();
+  const month = cursor.getMonth();
+  const todayStr = ymd(new Date());
+  const firstWeekday = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const active = filteredSchedules();
+
+  const cells = [];
+  for (let i = 0; i < firstWeekday; i++) cells.push(`<span class="mini-cell empty"></span>`);
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dateObj = new Date(year, month, day);
+    const dateStr = ymd(dateObj);
+    const hasSchedule = active.some((s) => scheduleActiveOn(s, dateStr, dateObj));
+    const classes = ["mini-cell"];
+    if (dateStr === todayStr) classes.push("today");
+    if (dateStr === state.calendarSelectedDate) classes.push("selected");
+    if (dateStr === state.calendarPendingStart) classes.push("pending");
+    cells.push(`
+      <button type="button" class="${classes.join(" ")}" data-date="${dateStr}">
+        ${day}${hasSchedule ? `<span class="mini-dot"></span>` : ""}
+      </button>
+    `);
+  }
+
+  return `
+    <div class="mini-calendar">
+      <div class="mini-calendar-head">
+        <button type="button" class="run-action-icon" id="mini-cal-prev" aria-label="Previous month"><i data-lucide="chevron-left"></i></button>
+        <strong>${cursor.toLocaleDateString([], { month: "long", year: "numeric" })}</strong>
+        <button type="button" class="run-action-icon" id="mini-cal-next" aria-label="Next month"><i data-lucide="chevron-right"></i></button>
+      </div>
+      <div class="mini-weekdays">${WEEKDAY_NAMES.map((d) => `<span>${d[0]}</span>`).join("")}</div>
+      <div class="mini-grid">${cells.join("")}</div>
+    </div>
+  `;
+}
+
+function renderMonthGrid() {
+  ensureCalendarState();
+  const cursor = state.calendarCursor;
+  const year = cursor.getFullYear();
+  const month = cursor.getMonth();
+  const todayStr = ymd(new Date());
+  const firstWeekday = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const active = filteredSchedules();
+
+  const cells = [];
+  for (let i = 0; i < firstWeekday; i++) cells.push(`<div class="calendar-cell empty"></div>`);
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dateObj = new Date(year, month, day);
+    const dateStr = ymd(dateObj);
+    const items = active.filter((s) => scheduleActiveOn(s, dateStr, dateObj));
+    const dots = items
+      .slice(0, 4)
+      .map((s) => `<span class="calendar-dot" style="background:${scheduleAgentColor(s.agentKey)}" title="${escapeHtml(s.label)}"></span>`)
+      .join("");
+    const classes = ["calendar-cell"];
+    if (dateStr === todayStr) classes.push("today");
+    if (dateStr === state.calendarSelectedDate) classes.push("selected");
+    if (dateStr === state.calendarPendingStart) classes.push("pending");
+    cells.push(`
+      <button type="button" class="${classes.join(" ")}" data-date="${dateStr}">
+        <span class="calendar-cell-num">${day}</span>
+        <span class="calendar-cell-dots">${dots}</span>
+      </button>
+    `);
+  }
+
+  return `
+    <div class="calendar-weekdays">${WEEKDAY_NAMES.map((d) => `<span>${d}</span>`).join("")}</div>
+    <div class="calendar-grid">${cells.join("")}</div>
+  `;
+}
+
+function renderWeekGrid() {
+  ensureCalendarState();
+  const monday = state.calendarWeekCursor;
+  const days = weekDates(monday);
+  const todayStr = ymd(new Date());
+  const nowHour = new Date().getHours();
+  const active = filteredSchedules();
+  const [minHour, maxHour] = weekHourRange(days, active);
+
+  const parts = [`<div class="week-cell week-corner"></div>`];
+  for (const d of days) {
+    const dateStr = ymd(d);
+    const classes = ["week-day-head"];
+    if (dateStr === todayStr) classes.push("today");
+    if (dateStr === state.calendarSelectedDate) classes.push("selected");
+    parts.push(`
+      <button type="button" class="${classes.join(" ")}" data-date="${dateStr}">
+        <span class="week-day-name">${WEEKDAY_NAMES[d.getDay()]}</span>
+        <span class="week-day-num">${d.getDate()}</span>
+      </button>
+    `);
+  }
+
+  for (let h = minHour; h <= maxHour; h++) {
+    const isCurrentHour = h === nowHour;
+    parts.push(`<div class="week-hour-label${isCurrentHour ? " current" : ""}">${formatHourLabel(h)}</div>`);
+    for (const d of days) {
+      const dateStr = ymd(d);
+      const items = active.filter((s) => scheduleActiveOn(s, dateStr, d) && scheduleHour(s) === h);
+      const chips = items
+        .map(
+          (s) => `
+        <button type="button" class="week-chip${s.enabled ? "" : " disabled"}" style="--chip-color:${scheduleAgentColor(s.agentKey)}" data-edit-schedule="${s.id}" title="${escapeHtml(s.label)}">
+          <span class="week-chip-time">${s.time}</span>
+          <span class="week-chip-label">${escapeHtml(s.label)}</span>
+        </button>
+      `,
+        )
+        .join("");
+      const isNow = dateStr === todayStr && isCurrentHour;
+      parts.push(`<div class="week-cell${isNow ? " current" : ""}">${chips}</div>`);
+    }
+  }
+
+  return `
+    <div class="week-grid-wrap">
+      <div class="week-grid">${parts.join("")}</div>
+    </div>
+  `;
+}
+
+function renderDetailPanel() {
+  ensureCalendarState();
+  const dateStr = state.calendarSelectedDate;
+  const dateObj = parseYmd(dateStr);
+  const items = filteredSchedules().filter((s) => scheduleActiveOn(s, dateStr, dateObj));
+  const dateLabel = dateObj.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+
+  const body = items.length
+    ? items
+        .map(
+          (s) => `
+      <div class="detail-card" style="--chip-color:${scheduleAgentColor(s.agentKey)}">
+        <div class="detail-card-head">
+          <span class="detail-card-title">${escapeHtml(s.label)}</span>
+          <span class="detail-card-time">${s.time}</span>
+        </div>
+        <div class="detail-card-meta">${escapeHtml(sourceLabel(s.agentKey))} · ${escapeHtml(describeRecurrence(s.recurrence))}</div>
+        <div class="detail-card-goal">${escapeHtml(truncateText(s.goal, 90))}</div>
+        <div class="detail-card-actions">
+          <button type="button" class="toggle-switch${s.enabled ? " on" : ""}" data-toggle-schedule="${s.id}" data-enabled="${s.enabled}" role="switch" aria-checked="${s.enabled}" aria-label="${s.enabled ? "Disable" : "Enable"} ${escapeHtml(s.label)}">
+            <span class="toggle-knob"></span>
+          </button>
+          <button type="button" class="run-action-icon" data-edit-schedule="${s.id}" title="Edit" aria-label="Edit"><i data-lucide="pencil"></i></button>
+          <button type="button" class="run-action-icon run-action-danger" data-delete-schedule="${s.id}" title="Delete" aria-label="Delete"><i data-lucide="trash-2"></i></button>
+        </div>
+      </div>
+    `,
+        )
+        .join("")
+    : `<div class="bento-detail-empty">No automations on this date.</div>`;
+
+  return `
+    <div class="detail-panel">
+      <div class="detail-panel-head">
+        <strong>${escapeHtml(dateLabel)}</strong>
+        <button type="button" class="run-action-icon" id="detail-add-schedule" title="New automation" aria-label="New automation"><i data-lucide="plus"></i></button>
+      </div>
+      <div class="detail-panel-body">${body}</div>
+    </div>
+  `;
+}
+
+function renderScheduleList() {
+  const items = filteredSchedules();
+  if (!items.length) {
+    return `<div class="bento-detail-empty">No automations match this filter.</div>`;
+  }
+  return `
+    <ul class="schedule-list">
+      ${items
+        .map(
+          (s) => `
+        <li class="schedule-item${s.enabled ? "" : " disabled"}">
+          <span class="calendar-dot" style="background:${scheduleAgentColor(s.agentKey)}"></span>
+          <span class="schedule-item-body">
+            <span class="schedule-item-label">${escapeHtml(s.label)}</span>
+            <span class="item-meta">${escapeHtml(sourceLabel(s.agentKey))} · ${s.time} · ${escapeHtml(describeRecurrence(s.recurrence))}${s.lastFiredDate ? ` · last ran ${s.lastFiredDate}` : ""}</span>
+          </span>
+          <span class="schedule-item-actions">
+            <button type="button" class="toggle-switch${s.enabled ? " on" : ""}" data-toggle-schedule="${s.id}" data-enabled="${s.enabled}" role="switch" aria-checked="${s.enabled}" aria-label="${s.enabled ? "Disable" : "Enable"} ${escapeHtml(s.label)}">
+              <span class="toggle-knob"></span>
+            </button>
+            <button type="button" class="run-action-icon" data-edit-schedule="${s.id}" title="Edit" aria-label="Edit"><i data-lucide="pencil"></i></button>
+            <button type="button" class="run-action-icon run-action-danger" data-delete-schedule="${s.id}" title="Delete" aria-label="Delete"><i data-lucide="trash-2"></i></button>
+          </span>
+        </li>
+      `,
+        )
+        .join("")}
+    </ul>
+  `;
+}
+
+function renderCalendarTabs() {
+  const tabs = [
+    { key: "all", label: "All" },
+    { key: "active", label: "Active" },
+    { key: "disabled", label: "Disabled" },
+  ];
+  return `
+    <div class="calendar-tabs">
+      ${tabs
+        .map(
+          (t) =>
+            `<button type="button" class="calendar-tab${state.calendarStatusFilter === t.key ? " active" : ""}" data-calendar-status="${t.key}">${t.label}</button>`,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderCalendarToolbar() {
+  ensureCalendarState();
+  const label =
+    state.calendarView === "week"
+      ? formatWeekRangeLabel(state.calendarWeekCursor)
+      : state.calendarCursor.toLocaleDateString([], { month: "long", year: "numeric" });
+
+  return `
+    <div class="calendar-toolbar">
+      <div class="calendar-toolbar-left">
+        <button type="button" class="archive-toggle-btn" id="calendar-today">Today</button>
+        <div class="calendar-nav-arrows">
+          <button type="button" class="run-action-icon" id="calendar-prev" aria-label="Previous"><i data-lucide="chevron-left"></i></button>
+          <button type="button" class="run-action-icon" id="calendar-next" aria-label="Next"><i data-lucide="chevron-right"></i></button>
+        </div>
+        <strong class="calendar-range-label">${escapeHtml(label)}</strong>
+      </div>
+      <div class="calendar-toolbar-right">
+        ${
+          state.calendarRangeMode && state.calendarPendingStart
+            ? `<span class="calendar-hint">Selecting range from ${state.calendarPendingStart} — click the end date. <button type="button" class="link-btn" id="calendar-clear-selection">Cancel</button></span>`
+            : ""
+        }
+        <button type="button" class="archive-toggle-btn${state.calendarRangeMode ? " active" : ""}" id="calendar-range-toggle">
+          ${state.calendarRangeMode ? "Range: on" : "Select a range"}
+        </button>
+        <div class="view-toggle">
+          <button type="button" class="view-toggle-btn${state.calendarView === "week" ? " active" : ""}" data-calendar-view="week">Week</button>
+          <button type="button" class="view-toggle-btn${state.calendarView === "month" ? " active" : ""}" data-calendar-view="month">Month</button>
+        </div>
+        <button type="button" class="ai-button" id="calendar-add"><i data-lucide="plus"></i> Schedule automation</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderCalendarView() {
+  ensureCalendarState();
+  return `
+    <div class="calendar-view">
+      <div class="calendar-view-head">
+        <h2>Calendar</h2>
+        ${renderCalendarTabs()}
+      </div>
+
+      ${renderCalendarToolbar()}
+
+      <div class="calendar-columns">
+        <aside class="calendar-side">
+          ${renderMiniCalendar()}
+          ${renderDetailPanel()}
+        </aside>
+        <div class="calendar-main">
+          ${state.calendarView === "week" ? renderWeekGrid() : renderMonthGrid()}
+        </div>
+      </div>
+
+      <div class="tasks-panel schedule-panel">
+        <h3>All scheduled automations</h3>
+        ${renderScheduleList()}
+      </div>
+    </div>
+    ${renderScheduleModal()}
+  `;
+}
+
+function agentOptionsHtml(selected) {
+  const options = [{ key: "ceo", label: "CEO" }, ...state.departments.filter((d) => d.key !== "calendar")];
+  return options
+    .map((o) => `<option value="${o.key}"${o.key === selected ? " selected" : ""}>${escapeHtml(o.label)}</option>`)
+    .join("");
+}
+
+function renderScheduleModal() {
+  const m = state.scheduleModal;
+  if (!m) return "";
+
+  const recurrenceFields =
+    m.recurrenceType === "once"
+      ? `<label class="field-label">Date<input type="date" name="date" value="${m.date}" required /></label>`
+      : `
+        <label class="field-label">Start date<input type="date" name="startDate" value="${m.startDate}" required /></label>
+        <label class="field-label">End date (optional)<input type="date" name="endDate" value="${m.endDate === m.startDate ? "" : m.endDate}" /></label>
+        ${
+          m.recurrenceType === "weekly"
+            ? `<div class="field-label">Repeats on
+                <div class="weekday-picker">
+                  ${WEEKDAY_NAMES.map(
+                    (name, i) => `
+                    <label class="weekday-chip">
+                      <input type="checkbox" name="weekday" value="${i}" ${m.weekdays.includes(i) ? "checked" : ""} />
+                      ${name}
+                    </label>
+                  `,
+                  ).join("")}
+                </div>
+              </div>`
+            : ""
+        }
+      `;
+
+  const isEdit = Boolean(m.id);
+
+  return `
+    <div class="confirm-backdrop" id="schedule-modal-backdrop">
+      <div class="confirm-modal schedule-modal" role="dialog" aria-modal="true" aria-labelledby="schedule-modal-title">
+        <h3 id="schedule-modal-title">${isEdit ? "Edit automation" : "Schedule an automation"}</h3>
+        <form id="schedule-form">
+          <label class="field-label">Title<input type="text" name="label" value="${escapeHtml(m.label)}" placeholder="e.g. Weekly sales outreach" required /></label>
+          <label class="field-label">Agent
+            <select name="agentKey">${agentOptionsHtml(m.agentKey)}</select>
+          </label>
+          <label class="field-label">Goal<textarea name="goal" rows="3" placeholder="What should the agent do when this fires?" required>${escapeHtml(m.goal)}</textarea></label>
+          <label class="field-label">Recurrence
+            <select id="schedule-recurrence-type" name="recurrenceType">
+              <option value="once"${m.recurrenceType === "once" ? " selected" : ""}>Once</option>
+              <option value="daily"${m.recurrenceType === "daily" ? " selected" : ""}>Daily</option>
+              <option value="weekly"${m.recurrenceType === "weekly" ? " selected" : ""}>Weekly</option>
+            </select>
+          </label>
+          ${recurrenceFields}
+          <label class="field-label">Time<input type="time" name="time" value="${m.time}" required /></label>
+          ${m.error ? `<p class="attachment-error">${escapeHtml(m.error)}</p>` : ""}
+          <div class="confirm-modal-actions">
+            ${isEdit ? `<button type="button" class="confirm-btn confirm-btn-danger" id="schedule-modal-delete">Delete</button>` : ""}
+            <button type="button" class="confirm-btn confirm-btn-cancel" id="schedule-modal-cancel">Cancel</button>
+            <button type="submit" class="confirm-btn confirm-btn-primary" ${m.submitting ? "disabled" : ""}>${m.submitting ? "Saving…" : isEdit ? "Save changes" : "Schedule automation"}</button>
+          </div>
+        </form>
       </div>
     </div>
   `;
@@ -1245,6 +2327,96 @@ function attachHandlers() {
     btn.addEventListener("click", () => disconnectAccount(btn.dataset.accountKey));
   });
 
+  document.getElementById("settings-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const btn = form.querySelector("button[type=submit]");
+    btn.disabled = true;
+    try {
+      await saveSettings(form);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // --- Files ---
+
+  document.querySelectorAll(".files-row[data-files-path]").forEach((row) => {
+    row.addEventListener("click", () => {
+      const path = row.dataset.filesPath;
+      const parentPath = path.split("/").slice(0, -1).join("/");
+      const entry = (state.filesChildren.get(parentPath) ?? []).find((c) => c.path === path);
+      if (entry) selectFilesEntry(entry);
+    });
+  });
+
+  const filesUploadInput = document.getElementById("files-upload-input");
+  document.getElementById("files-upload-btn")?.addEventListener("click", () => filesUploadInput?.click());
+  filesUploadInput?.addEventListener("change", () => {
+    if (filesUploadInput.files?.length) uploadFilesToTarget(filesUploadInput.files);
+    filesUploadInput.value = "";
+  });
+
+  // --- Calendar ---
+
+  document.getElementById("mini-cal-prev")?.addEventListener("click", () => shiftCalendarMonth(-1));
+  document.getElementById("mini-cal-next")?.addEventListener("click", () => shiftCalendarMonth(1));
+  document.getElementById("calendar-today")?.addEventListener("click", () => goToToday());
+  document.getElementById("calendar-prev")?.addEventListener("click", () => {
+    if (state.calendarView === "week") shiftCalendarWeek(-1);
+    else shiftCalendarMonth(-1);
+  });
+  document.getElementById("calendar-next")?.addEventListener("click", () => {
+    if (state.calendarView === "week") shiftCalendarWeek(1);
+    else shiftCalendarMonth(1);
+  });
+  document.getElementById("calendar-range-toggle")?.addEventListener("click", () => toggleCalendarRangeMode());
+  document.getElementById("calendar-clear-selection")?.addEventListener("click", () => clearCalendarSelection());
+  document.getElementById("calendar-add")?.addEventListener("click", () => openScheduleModal(state.calendarSelectedDate, state.calendarSelectedDate));
+  document.getElementById("detail-add-schedule")?.addEventListener("click", () => openScheduleModal(state.calendarSelectedDate, state.calendarSelectedDate));
+
+  document.querySelectorAll("[data-calendar-view]").forEach((btn) => {
+    btn.addEventListener("click", () => setCalendarView(btn.dataset.calendarView));
+  });
+
+  document.querySelectorAll("[data-calendar-status]").forEach((btn) => {
+    btn.addEventListener("click", () => setCalendarStatusFilter(btn.dataset.calendarStatus));
+  });
+
+  document.querySelectorAll(".calendar-cell[data-date], .mini-cell[data-date], .week-day-head[data-date]").forEach((cell) => {
+    cell.addEventListener("click", () => selectCalendarDate(cell.dataset.date));
+  });
+
+  document.querySelectorAll("[data-toggle-schedule]").forEach((btn) => {
+    btn.addEventListener("click", () => toggleSchedule(btn.dataset.toggleSchedule, btn.dataset.enabled !== "true"));
+  });
+
+  document.querySelectorAll("[data-delete-schedule]").forEach((btn) => {
+    btn.addEventListener("click", () => deleteSchedule(btn.dataset.deleteSchedule));
+  });
+
+  document.querySelectorAll("[data-edit-schedule]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const schedule = state.schedules.find((s) => s.id === btn.dataset.editSchedule);
+      if (schedule) openEditScheduleModal(schedule);
+    });
+  });
+
+  if (state.scheduleModal) {
+    document.getElementById("schedule-modal-backdrop")?.addEventListener("click", (e) => {
+      if (e.target.id === "schedule-modal-backdrop") closeScheduleModal();
+    });
+    document.getElementById("schedule-modal-cancel")?.addEventListener("click", () => closeScheduleModal());
+    document.getElementById("schedule-modal-delete")?.addEventListener("click", () => deleteSchedule(state.scheduleModal.id));
+    document.getElementById("schedule-recurrence-type")?.addEventListener("change", (e) => {
+      changeScheduleRecurrenceType(e.target.value);
+    });
+    document.getElementById("schedule-form")?.addEventListener("submit", (e) => {
+      e.preventDefault();
+      submitScheduleModal();
+    });
+  }
+
   const form = document.getElementById("goal-form");
   if (form) {
     form.addEventListener("submit", async (e) => {
@@ -1258,6 +2430,12 @@ function attachHandlers() {
         await submitGoal(goal);
       } finally {
         btn.disabled = false;
+      }
+    });
+    document.getElementById("goal-input")?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        form.requestSubmit();
       }
     });
   }
@@ -1290,6 +2468,12 @@ function attachHandlers() {
         await sendReply(id, message);
       } finally {
         btn.disabled = false;
+      }
+    });
+    document.getElementById("reply-input")?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        replyForm.requestSubmit();
       }
     });
   }

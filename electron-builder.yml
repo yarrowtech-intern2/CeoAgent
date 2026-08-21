@@ -1,0 +1,24 @@
+appId: com.yarrowtech.ceoagentos
+productName: CEO Agent OS
+directories:
+  output: release
+files:
+  - dist/**/*
+  - electron/**/*
+  - package.json
+# The Claude Agent SDK's Windows build spawns a ~280MB claude.exe helper
+# binary as a subprocess — that needs to be directly executable from disk,
+# not unpacked from a virtual archive on demand.
+asar: false
+win:
+  target: nsis
+  icon: build/icon.ico
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+publish:
+  provider: github
+  owner: yarrowtech-intern2
+  repo: CeoAgent-releases

@@ -1,12 +1,11 @@
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import type { RunEvent, LinearTaskRef } from "../orchestrator.js";
+import { getDataDir } from "../paths.js";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = join(__dirname, "..", "..", "data");
+const DATA_DIR = getDataDir();
 const DATA_FILE = join(DATA_DIR, "runs.json");
 
 export interface RunRecord {

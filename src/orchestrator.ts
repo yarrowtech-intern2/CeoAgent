@@ -6,6 +6,9 @@ import { linkedinServer, LINKEDIN_TOOLS, isLinkedinConnected } from "./tools/lin
 import { zernioServer, ZERNIO_TOOLS, isZernioConnected } from "./tools/zernio.js";
 import { whatsappServer, WHATSAPP_TOOLS, isWhatsappConnected } from "./tools/whatsapp.js";
 import { n8nServer, N8N_TOOLS, isN8nConnected } from "./tools/n8n.js";
+import { imageGenServer, IMAGE_GEN_TOOLS, isImageGenConfigured } from "./tools/image-gen.js";
+import { postImagesServer, POST_IMAGES_TOOLS } from "./tools/post-images.js";
+import { schedulerServer } from "./tools/scheduler.js";
 import { DEPARTMENTS, buildAgentsRegistry, documentsServer, allSpecialistToolNames } from "./agents.js";
 import { WORKSPACE_DIR } from "./workspace.js";
 
@@ -26,6 +29,7 @@ ${rosterDescription()}
 5. Always call the Agent tool with run_in_background: false. Backgrounding a delegation doesn't save any time here — this app already waits for the full run before reporting back — and specialists' tool calls (Linear, documents, etc.) are unreliable when run in the background, silently returning empty results even though nothing actually failed. Only synchronous delegation gets a trustworthy result.
 6. If n8n workflow tools are available, you (not a specialist) are the one who triggers cross-cutting automations (e.g. notifying a channel, updating an external system) once delegated work is done — check list_n8n_workflows for what's available before assuming one exists. Don't invent a workflow name; only ever trigger ones that tool actually lists.
 7. After delegating (and triggering any relevant automation), summarize back to the user: what was decided, who you delegated to, and what they reported. If a specialist hit a blocker (e.g. a tool isn't configured), say so honestly rather than claiming success.
+8. When a specialist reports having sent, posted, or messaged something, only relay that as confirmed if their report cites a concrete identifier (a message ID, post ID) — a report of success with no identifier is not confirmed, and you must say so plainly (e.g. "reported as sent, but I can't confirm — no message ID came back") rather than repeating the claim as fact. This app has a known issue where a delegated specialist's tool result can go missing in transit, causing it to report success it never actually verified.
 
 Be decisive. Do not ask clarifying questions unless the goal is genuinely ambiguous about scope or priority.`;
 
@@ -33,12 +37,15 @@ function buildMcpServers() {
   return {
     linear: linearServer,
     documents: documentsServer,
+    scheduler: schedulerServer,
     ...(isGmailConnected() ? { gmail: gmailServer } : {}),
     ...(isInstagramConnected() ? { instagram: instagramServer } : {}),
     ...(isLinkedinConnected() ? { linkedin: linkedinServer } : {}),
     ...(isZernioConnected() ? { zernio: zernioServer } : {}),
     ...(isWhatsappConnected() ? { whatsapp: whatsappServer } : {}),
     ...(isN8nConnected() ? { n8n: n8nServer } : {}),
+    ...(isZernioConnected() && isImageGenConfigured() ? { image_gen: imageGenServer } : {}),
+    ...(isZernioConnected() ? { post_images: postImagesServer } : {}),
   };
 }
 
@@ -50,6 +57,8 @@ function allToolNames(): string[] {
   if (isZernioConnected()) for (const t of ZERNIO_TOOLS) names.add(t);
   if (isWhatsappConnected()) for (const t of WHATSAPP_TOOLS) names.add(t);
   if (isN8nConnected()) for (const t of N8N_TOOLS) names.add(t);
+  if (isZernioConnected() && isImageGenConfigured()) for (const t of IMAGE_GEN_TOOLS) names.add(t);
+  if (isZernioConnected()) for (const t of POST_IMAGES_TOOLS) names.add(t);
   return [...names];
 }
 

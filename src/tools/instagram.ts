@@ -1,11 +1,10 @@
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { getDataDir } from "../paths.js";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = join(__dirname, "..", "..", "data");
+const DATA_DIR = getDataDir();
 const TOKEN_FILE = join(DATA_DIR, "instagram-token.json");
 
 // "Instagram API with Instagram Login" — logs the user into their Instagram
