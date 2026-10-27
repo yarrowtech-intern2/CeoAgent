@@ -25,6 +25,7 @@ import { DEPARTMENTS, buildAgentsRegistry, documentsServer, allSpecialistToolNam
 import { getWorkspaceDir } from "./workspace.js";
 import { DEVELOPER_INFO_BLOCK } from "./developer/index.js";
 import { workspaceGuardHook } from "./agentSandbox.js";
+import { getEnvValue } from "./server/settings.js";
 
 export { getWorkspaceDir };
 
@@ -264,6 +265,19 @@ async function drainQuery(
 }
 
 /**
+ * Env for the Claude Code subprocess. It authenticates with ANTHROPIC_API_KEY
+ * when set (the deployed server has no `claude login`); resolving it through
+ * getEnvValue also honours a key the org saved in Settings.
+ */
+// Pinned so the deployed server bills Sonnet rates, not whatever Claude Code defaults to.
+const AGENT_MODEL = process.env.CEO_AGENT_MODEL?.trim() || "claude-sonnet-5-5";
+
+function claudeSubprocessEnv(): Record<string, string | undefined> {
+  const apiKey = getEnvValue("ANTHROPIC_API_KEY")?.trim();
+  return apiKey ? { ...process.env, ANTHROPIC_API_KEY: apiKey } : { ...process.env };
+}
+
+/**
  * Runs the CEO agent, which analyzes the goal and delegates to whichever
  * specialists fit. Pass `resumeSessionId` (from a prior run's returned
  * `sessionId`) to continue that same conversation — e.g. when the CEO asked
@@ -282,6 +296,8 @@ export async function runCeoAgent(
     options: {
       systemPrompt: { type: "preset", preset: "claude_code", append: CEO_SYSTEM_PROMPT },
       cwd: workspaceDir,
+      env: claudeSubprocessEnv(),
+      model: AGENT_MODEL,
       mcpServers: buildMcpServers(),
       agents: buildAgentsRegistry(),
       // `tools` is a session-wide ceiling, not just the CEO's own toolset — it
@@ -294,7 +310,7 @@ export async function runCeoAgent(
       tools: builtinToolNames(),
       allowedTools: allToolNames(),
       permissionMode: "dontAsk",
-      maxTurns: 40,
+      maxTurns: 20,
       hooks: agentHooks(workspaceDir),
       ...(resumeSessionId ? { resume: resumeSessionId } : {}),
       ...(abortController ? { abortController } : {}),
@@ -322,12 +338,14 @@ export async function runSpecialistAgent(
     options: {
       agent: agentKey,
       cwd: workspaceDir,
+      env: claudeSubprocessEnv(),
+      model: AGENT_MODEL,
       mcpServers: buildMcpServers(),
       agents: registry,
       tools: agent.tools ?? [],
       allowedTools: agent.tools ?? [],
       permissionMode: "dontAsk",
-      maxTurns: 40,
+      maxTurns: 20,
       hooks: agentHooks(workspaceDir),
       ...(resumeSessionId ? { resume: resumeSessionId } : {}),
       ...(abortController ? { abortController } : {}),
