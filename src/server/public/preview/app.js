@@ -1115,8 +1115,12 @@ function renderOrbit() {
     `;
   }).join("");
 
+  // Each card sits in an .orbit-slot: on desktop both wrappers are
+  // display:contents (cards keep the absolute % layout above); on narrow
+  // screens they become a 3D carousel ring (--a = the slot's angle on it).
   const cards = QUICK_ACTIONS.map(
     (a, i) => `
+    <div class="orbit-slot" style="--a:${(360 / QUICK_ACTIONS.length) * i}deg">
     <button type="button" class="orbit-card glass-surface" data-quick-action="${a.key}" style="left:${ORBIT_LAYOUT[i].x}%;top:${ORBIT_LAYOUT[i].y}%">
       <span class="orbit-card-icon" style="background:${a.bg};color:${a.fg}">${icon(a.icon)}</span>
       <span class="orbit-card-body">
@@ -1124,6 +1128,7 @@ function renderOrbit() {
         <span class="orbit-card-desc">${a.desc}</span>
       </span>
     </button>
+    </div>
   `,
   ).join("");
 
@@ -1131,7 +1136,7 @@ function renderOrbit() {
     <div class="orbit">
       <div class="orbit-sphere" aria-hidden="true">${renderHomeBotFace()}</div>
       <svg class="orbit-lines" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true">${connectors}</svg>
-      ${cards}
+      <div class="orbit-carousel">${cards}</div>
     </div>
   `;
 }

@@ -1123,6 +1123,8 @@ svg { display: block; }
 .orbit-ring {
   display: none !important;
 }
+.orbit-carousel,
+.orbit-slot { display: contents; }
 
 /* ---------- 3D Metallic Bot (Pure WebGL Procedural Physics Engine) ---------- */
 .metallic-bot-root,
@@ -5150,26 +5152,92 @@ svg { display: block; }
 
 /* ---------- Responsive ---------- */
 
+/* The ring is tilted (--tilt) so the front arc dips below the bot and the
+ * back arc rises behind it — an ellipse instead of an edge-on line. */
+@keyframes orbit-spin {
+  from { transform: rotateX(var(--tilt)) rotateY(0deg); }
+  to { transform: rotateX(var(--tilt)) rotateY(360deg); }
+}
+/* Counter-spin keeps each card facing the viewer: ring angle + slot angle
+ * + this rotation always sum to 0, and the tilt is undone with rotateX. */
+@keyframes orbit-face {
+  from { transform: rotateY(calc(var(--a) * -1)) rotateX(calc(var(--tilt) * -1)); }
+  to { transform: rotateY(calc(var(--a) * -1 - 360deg)) rotateX(calc(var(--tilt) * -1)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .orbit-carousel, .orbit-card { animation: none !important; }
+}
+
 @media (max-width: 1180px) {
   .right-bar { display: none; }
 }
 
 @media (max-width: 980px) {
-  .orbit { height: auto; display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin: 24px 0; }
-  /* The sphere stays visible here (just the connector lines/dots go, since
-   * those are drawn for the absolute-positioned desktop layout and
-   * wouldn't line up with the now-static stacked cards) — placed as its
-   * own full-width row above the grid rather than left absolutely
-   * centered, which is what .orbit-sphere's positioning assumes. */
-  .orbit-sphere {
-    position: static;
-    grid-column: 1 / -1;
-    transform: none;
-    margin: 0 auto 8px;
+  /* 3D carousel: the six cards ride a ring that slowly spins around the bot.
+   * Slots are placed on the ring (rotateY(--a) translateZ(--r)); each card
+   * counter-rotates by the ring's angle so it always faces the viewer.
+   * Cards behind the bot are occluded by it (shared preserve-3d context).
+   * The desktop connector lines/dots don't apply here. */
+  .orbit {
+    --r: clamp(92px, 27vw, 170px);
+    --tilt: -28deg;
+    height: 340px;
+    min-height: 0;
+    max-height: none;
+    flex: 0 0 auto;
+    margin: 12px 0 20px;
+    perspective: 900px;
+    perspective-origin: 50% 10%;
+    transform-style: preserve-3d;
   }
+  .orbit-sphere { top: 40%; }
   .orbit-lines { display: none; }
-  .orbit-card { position: static; transform: none; width: auto; }
-  .orbit-card:hover { transform: translateY(-2px); }
+  .orbit-carousel {
+    display: block;
+    position: absolute;
+    left: 50%;
+    top: 64%;
+    width: 0;
+    height: 0;
+    transform-style: preserve-3d;
+    transform: rotateX(var(--tilt));
+    animation: orbit-spin 26s linear infinite;
+  }
+  .orbit-slot {
+    display: block;
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 0;
+    height: 0;
+    transform-style: preserve-3d;
+    transform: rotateY(var(--a)) translateZ(var(--r));
+  }
+  .orbit-card {
+    left: -56px !important;
+    top: -22px !important;
+    width: 112px;
+    padding: 8px 10px;
+    gap: 8px;
+    align-items: center;
+    transform: rotateY(calc(var(--a) * -1)) rotateX(calc(var(--tilt) * -1));
+    animation: orbit-face 26s linear infinite;
+    /* Blur-behind doesn't composite well inside a 3D-transformed ring. */
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: color-mix(in srgb, var(--bg-raised) 92%, transparent);
+  }
+  .orbit-card:hover { transform: rotateY(calc(var(--a) * -1)) rotateX(calc(var(--tilt) * -1)); box-shadow: 0 14px 30px rgba(0, 0, 0, 0.18); }
+  .orbit-card-icon { width: 24px; height: 24px; border-radius: 7px; }
+  .orbit-card-icon svg { width: 14px; height: 14px; }
+  .orbit-card-title { font-size: 12px; }
+  .orbit-card-title svg,
+  .orbit-card-desc { display: none; }
+  /* Pause while the user is hovering/touching so a card can be tapped. */
+  .orbit:hover .orbit-carousel,
+  .orbit:hover .orbit-card,
+  .orbit:active .orbit-carousel,
+  .orbit:active .orbit-card { animation-play-state: paused; }
   .cal-layout { grid-template-columns: 1fr; }
   .files-layout { grid-template-columns: 1fr; }
 }
@@ -5198,16 +5266,18 @@ svg { display: block; }
   .topbar-menu-btn { display: flex; }
   .home-hero { flex-direction: column; gap: 14px; padding-right: 0; }
   .home-quote { text-align: left; max-width: none; }
-  .content-home { height: auto; overflow: visible; display: block; padding: 28px clamp(16px, 4vw, 32px) 60px; }
+  /* Top padding clears the absolutely-positioned floating topbar (14px + 48px). */
+  .content-home { height: auto; overflow: visible; display: block; padding: 76px clamp(16px, 4vw, 32px) 60px; }
   .home-view { display: block; }
 }
 
 @media (max-width: 640px) {
-  .orbit { grid-template-columns: 1fr; }
   .topbar { padding: 0 14px; gap: 10px; }
   .topbar-search { max-width: none; }
   .topbar-search-kbd { display: none; }
-  .content { padding: 20px 14px 48px; }
+  /* Top padding clears the floating topbar (14px + 48px). */
+  .content { padding: 76px 14px 48px; }
+  .content.content-home { padding: 76px 14px 60px; }
   .topbar-notifs { right: 14px; left: 14px; width: auto; }
   .chat-page { height: calc(100vh - 64px - 110px); }
   .chat-goal { font-size: 17px; }
