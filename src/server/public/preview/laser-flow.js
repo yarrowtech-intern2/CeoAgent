@@ -24,16 +24,16 @@ const THEMES = {
   },
   light: {
     isDark: 0.0,
-    core: [0.98, 0.80, 0.08],      // #facc15 (radiant golden yellow)
-    body: [0.75, 0.52, 0.99],      // #c084fc (vibrant lavender)
-    outer: [0.45, 0.18, 0.85],     // #7c3aed (rich royal violet)
-    haloCore: [0.99, 0.88, 0.28],  // #fde047 (warm golden yellow core bloom)
-    haloOuter: [0.66, 0.33, 0.97], // #a855f7 (radiant lavender/violet halo mist)
+    core: [0.85, 0.98, 0.62],      // #d9f99d (same green palette as dark mode)
+    body: [0.29, 0.87, 0.50],      // #4ade80
+    outer: [0.08, 0.50, 0.24],     // #15803d
+    haloCore: [0.85, 0.98, 0.62],  // #d9f99d
+    haloOuter: [0.13, 0.77, 0.37], // #22c55e
     haloIntensity: 0.0,            // Completely removed shadow/halo behind bot
-    strandOpacity: 0.68,           // Rich and vibrant violet, lavender & yellow lines
-    ribbonOpacity: 0.28,
-    particleCore: [0.96, 0.62, 0.04], // #f59e0b (golden spark)
-    particleBody: [0.75, 0.52, 0.99], // #c084fc (lavender bokeh)
+    strandOpacity: 0.78,           // Crisp, vibrant green visibility against light background
+    ribbonOpacity: 0.32,
+    particleCore: [0.29, 0.87, 0.50], // #4ade80 (white would vanish on light bg)
+    particleBody: [0.52, 0.94, 0.67], // #86efac
     particleOpacity: 0.72,
   },
 };
@@ -53,7 +53,7 @@ attribute float aLane;
 attribute float aIntensity;
 attribute float aApexDist;
 attribute float aSeed;
-attribute float aColorType; // 0.0 yellow, 0.5 lavender, 1.0 violet
+attribute float aColorType; // 0.0 neon lime, 0.5 emerald, 1.0 deep forest green
 
 varying float vProgress;
 varying float vIntensity;
@@ -134,37 +134,24 @@ void main() {
   float hoverGlow = smoothstep(1.8, 0.0, mDist);
   brightness += hoverGlow * 0.85;
 
-  vec3 col;
-
-  if (uIsDark > 0.5) {
-    // Dark mode: electric neon lime & emerald
-    col = mix(uColorOuter, uColorBody, clamp(pulse * 0.45 + (1.0 - vApexDist), 0.0, 1.0));
-    col = mix(col, uColorCore, apexGlow * 0.85 + hoverGlow * 0.4);
-    float alpha = brightness * uGlobalOpacity;
-    gl_FragColor = vec4(col, clamp(alpha, 0.0, 1.0));
+  // Harmonious greenish palette (same electric neon lime, vibrant emerald & deep forest green as dark mode):
+  vec3 strandColor;
+  if (vColorType < 0.35) {
+    // Electric neon lime accent strand
+    strandColor = mix(uColorBody, uColorCore, 0.35);
+  } else if (vColorType < 0.70) {
+    // Vibrant emerald strand
+    strandColor = uColorBody;
   } else {
-    // Light mode: Violet, Lavender, and Yellow strings
-    vec3 cYellow = vec3(0.98, 0.78, 0.08);   // Luminous Gold/Yellow
-    vec3 cLavender = vec3(0.75, 0.50, 0.99); // Soft Radiant Lavender
-    vec3 cViolet = vec3(0.44, 0.16, 0.84);   // Royal Violet
-
-    if (vColorType < 0.35) {
-      // Yellow-dominant strand with lavender undertone
-      col = mix(cYellow, cLavender, pulse * 0.4);
-    } else if (vColorType < 0.70) {
-      // Lavender strand with gold highlight
-      col = mix(cLavender, cYellow, pulse * 0.45);
-    } else {
-      // Deep violet strand
-      col = mix(cViolet, cLavender, pulse * 0.4);
-    }
-
-    // Near apex & hover: surge with golden yellow radiance
-    col = mix(col, cYellow, apexGlow * 0.75 + hoverGlow * 0.5);
-
-    float alpha = brightness * uGlobalOpacity;
-    gl_FragColor = vec4(col, clamp(alpha, 0.0, 0.95));
+    // Deep forest green strand
+    strandColor = mix(uColorBody, uColorOuter, 0.45);
   }
+
+  vec3 col = mix(uColorOuter, strandColor, clamp(pulse * 0.45 + (1.0 - vApexDist), 0.0, 1.0));
+  col = mix(col, uColorCore, apexGlow * 0.85 + hoverGlow * 0.4);
+
+  float alpha = brightness * uGlobalOpacity;
+  gl_FragColor = vec4(col, clamp(alpha, 0.0, 1.0));
 }
 `;
 
@@ -568,7 +555,7 @@ function mount(container, options = {}) {
     const isHero = s % 7 === 0;
     const intensity = isHero ? 1.6 + Math.random() * 0.4 : 0.80 + Math.random() * 0.45;
 
-    // Color distribution in Light mode: ~35% yellow, ~35% lavender, ~30% violet
+    // Color distribution across green spectrum: ~35% neon lime, ~35% emerald, ~30% forest green
     const colorType = (s % 3) === 0 ? 0.0 : (s % 3) === 1 ? 0.5 : 1.0;
 
     const points = generateStrandPath(type, lane, seed, POINTS_PER_STRAND);

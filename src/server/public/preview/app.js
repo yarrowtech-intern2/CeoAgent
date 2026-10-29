@@ -722,7 +722,8 @@ window.addEventListener("resize", () => {
 function renderSidebar() {
   const orgName = state.tenant?.organizationName || "Your organization";
   const initial = (state.tenant?.name || state.tenant?.email || "?").slice(0, 1).toUpperCase();
-  const collapsed = !!state.sidebarCollapsed;
+  const isMobile = typeof window !== "undefined" && window.innerWidth <= 880;
+  const collapsed = isMobile ? false : !!state.sidebarCollapsed;
   return `
     <aside class="sidebar${state.sidebarOpen ? " open" : ""}${collapsed ? " collapsed" : ""}" id="sidebar">
       <div class="sidebar-brand">
@@ -736,8 +737,9 @@ function renderSidebar() {
           </div>
           <div class="sidebar-brand-sub">${escapeHtml(orgName)}</div>
         </span>
-        <button type="button" class="sidebar-collapse-btn" id="sidebar-collapse-toggle" aria-label="${collapsed ? "Expand sidebar" : "Collapse sidebar"}" title="${collapsed ? "Expand sidebar" : "Collapse sidebar"}">
-          ${reicon(collapsed ? "chevron-right" : "chevron-left", 14)}
+        <button type="button" class="sidebar-collapse-btn" id="sidebar-collapse-toggle" aria-label="${isMobile ? "Close sidebar" : collapsed ? "Expand sidebar" : "Collapse sidebar"}" title="${isMobile ? "Close sidebar" : collapsed ? "Expand sidebar" : "Collapse sidebar"}">
+          <span class="desktop-collapse-icon">${reicon(collapsed ? "chevron-right" : "chevron-left", 14)}</span>
+          <span class="mobile-close-icon">${icon("x")}</span>
         </button>
       </div>
       <nav class="sidebar-nav">
@@ -3527,6 +3529,9 @@ function attachHandlers() {
     const slot = document.getElementById("metallic-bot-slot") || document.getElementById("fluffy-bot-slot");
     if (slot) botEngine.mount(slot);
   }
+  if (window.Orbit3D) {
+    window.Orbit3D.sync();
+  }
   document.querySelectorAll("[data-nav]").forEach((btn) => {
     btn.addEventListener("click", () => switchView(btn.dataset.nav));
   });
@@ -3536,9 +3541,32 @@ function attachHandlers() {
     render();
   });
   document.getElementById("sidebar-collapse-toggle")?.addEventListener("click", () => {
-    state.sidebarCollapsed = !state.sidebarCollapsed;
+    if (window.innerWidth <= 880) {
+      state.sidebarOpen = false;
+    } else {
+      state.sidebarCollapsed = !state.sidebarCollapsed;
+    }
     render();
   });
+
+  // Swipe left on sidebar to dismiss drawer on touch devices
+  const sidebarEl = document.getElementById("sidebar");
+  if (sidebarEl && window.innerWidth <= 880) {
+    let touchStartX = 0;
+    let touchStartY = 0;
+    sidebarEl.addEventListener("touchstart", (e) => {
+      touchStartX = e.touches[0].clientX;
+      touchStartY = e.touches[0].clientY;
+    }, { passive: true });
+    sidebarEl.addEventListener("touchend", (e) => {
+      const deltaX = e.changedTouches[0].clientX - touchStartX;
+      const deltaY = e.changedTouches[0].clientY - touchStartY;
+      if (deltaX < -45 && Math.abs(deltaY) < 100) {
+        state.sidebarOpen = false;
+        render();
+      }
+    }, { passive: true });
+  }
   document.getElementById("sidebar-brand-mark")?.addEventListener("click", () => {
     if (state.sidebarCollapsed) {
       state.sidebarCollapsed = false;
@@ -3978,7 +4006,12 @@ function attachHandlers() {
       // the composer it fills only exists on Home — switch there first if
       // we're not already on it, or the draft would be set on state with
       // nothing visible to show for it.
-      if (state.view !== "home") switchView("home");
+      if (state.view !== "home") {
+        switchView("home");
+      } else if (window.innerWidth <= 880) {
+        state.sidebarOpen = false;
+        render();
+      }
       fillComposerAndFocus(tool.prompt);
     });
   });
