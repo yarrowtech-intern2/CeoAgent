@@ -5,6 +5,43 @@ It does not deploy the Electron desktop shell. The VPS runs the compiled
 Node.js/Express server from `dist/server/index.js`, serves the UI from
 `dist/server/public`, and stores runtime data in a persistent directory.
 
+
+
+
+## Update code change t inflict in vps
+cd /var/www/CeoAgent
+git status
+git pull
+npm ci
+npm run build
+sudo systemctl restart ceoagent
+sudo systemctl status ceoagent --no-pager
+
+
+-----------------------------------------------------------------------------------
+## check projects
+# 1. Is a service running the app?
+systemctl list-units --type=service | grep -i -E "ceo|node|agent"
+
+# 2. Is it running under PM2 or Docker?
+pm2 list 2>/dev/null
+docker ps 2>/dev/null
+
+# 3. Which process is listening, and from which folder?
+ss -tlnp | grep -E "node|:3000"
+ls -l /proc/$(pgrep -f "dist/server/index.js\|tsx" | head -1)/cwd 2>/dev/null
+
+# 4. Search the disk for the project
+find / -name "orchestrator.*" -not -path "*/node_modules/*" 2>/dev/null | head
+ls ~ /var/www /srv /home 2>/dev/null
+
+----------------------------------------------------------------------------------
+
+
+
+
+
+
 ## 1. What You Need
 
 - Ubuntu 22.04 or 24.04 VPS

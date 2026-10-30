@@ -174,6 +174,48 @@ const POLL_MS = 10000;
 // department without guessing.
 const QUICK_ACTION_TARGETS = { plan: "manager", research: "analysis", analyze: "analysis", grow: "sales" };
 
+const INITIAL_EXECUTIVE_DECISIONS = [
+  {
+    id: "dec-pricing",
+    category: "Strategy",
+    badgeClass: "dept-strategy",
+    agentName: "Analysis Agent",
+    title: "Competitor Price Shift Detected",
+    summary: "Acme Corp reduced their Pro plan by 15%. Recommend lowering Starter Tier from $49 to $39/mo to capture 18% higher inbound conversion.",
+    metricValue: "+$4,800 MRR",
+    confidence: "94% confidence",
+    targetOrbitNode: "analyze",
+    primaryAction: "Approve & Update",
+    status: "pending",
+  },
+  {
+    id: "dec-auth-deploy",
+    category: "Engineering",
+    badgeClass: "dept-engineering",
+    agentName: "Developer Agent",
+    title: "Stripe Recurring Billing Webhooks",
+    summary: "Completed automated subscription renewal & webhook handlers with 100% test suite passing. Ready for instant zero-downtime deployment.",
+    metricValue: "42/42 tests pass",
+    confidence: "Production Ready",
+    targetOrbitNode: "execute",
+    primaryAction: "Deploy to Production",
+    status: "pending",
+  },
+  {
+    id: "dec-outreach",
+    category: "Growth",
+    badgeClass: "dept-growth",
+    agentName: "Sales Agent",
+    title: "Personalized Outreach Campaign",
+    summary: "Drafted tailored email copy for 50 high-affinity B2B founders in the AI & Developer Tools space. Pitch highlights 3x speedup.",
+    metricValue: "50 verified leads",
+    confidence: "High Personalization",
+    targetOrbitNode: "grow",
+    primaryAction: "Launch Campaign",
+    status: "pending",
+  },
+];
+
 const state = {
   theme: "light",
   view: "home",
@@ -181,6 +223,8 @@ const state = {
   sidebarCollapsed: false,
   loading: true,
   loadError: null,
+  homeCardTab: "decisions", // "decisions" | "activity"
+  executiveDecisions: [...INITIAL_EXECUTIVE_DECISIONS],
   tenant: null,
   departments: [],
   runs: [],
@@ -1029,7 +1073,7 @@ function renderHome() {
       <div class="home-hero">
         <div class="home-hero-text">
           <div class="home-eyebrow">👋 Good ${period}, ${escapeHtml(firstName())}</div>
-          <h1 class="home-greeting">What <strong>should</strong> we <strong>build</strong> today?</h1>
+          <h1 class="home-greeting">What <strong>should</strong> we<br><strong>build</strong> today?</h1>
           <p class="home-subtitle">Your AI co-founder to plan, execute and grow your ideas.</p>
         </div>
       </div>
@@ -1046,49 +1090,114 @@ function renderHome() {
   `;
 }
 
-// Fills the space left under the composer now that the old four-card
-// bottom row is gone — one focused, actionable list (today's runs, as a
-// checklist) rather than reviving the whole row, since the right bar
-// already covers "recent activity across everything."
+// Feature 2: Executive Decisions Triage Deck & Activity Log switcher
 function renderHomeFocusCard() {
   const todays = activeRuns()
     .filter((r) => isToday(r.createdAt))
     .slice(0, 8);
   const doneCount = todays.filter((r) => r.status === "success").length;
+  const pendingDecisions = (state.executiveDecisions || []).filter((d) => d.status === "pending");
+  const isDecisionsTab = state.homeCardTab === "decisions";
 
   return `
     <div class="home-focus-card glass-surface">
       <div class="home-focus-head">
-        <span class="home-focus-title">Today's Focus</span>
-        ${todays.length ? `<span class="home-focus-count">${doneCount}/${todays.length} done</span>` : ""}
-      </div>
-      <div class="home-focus-list">
-        ${
-          todays.length
-            ? todays
-                .map(
-                  (r) => `
-          <button type="button" class="home-focus-row" data-open-run="${r.id}">
-            <span class="home-focus-check ${r.status}">${r.status === "success" ? icon("check") : ""}</span>
-            <span class="home-focus-text">${escapeHtml(truncate(r.goal, 64))}</span>
-            <span class="home-focus-time">${new Date(r.createdAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</span>
+        <div class="decision-tabs" role="tablist">
+          <button type="button" class="decision-tab-btn ${isDecisionsTab ? "active" : ""}" data-decision-tab="decisions">
+            <span>Executive Decisions</span>
+            ${pendingDecisions.length ? `<span class="decision-tab-count">${pendingDecisions.length}</span>` : ""}
           </button>
-        `,
-                )
-                .join("")
-            : `<div class="home-focus-empty">Nothing run yet today — try the composer above.</div>`
-        }
+          <button type="button" class="decision-tab-btn ${!isDecisionsTab ? "active" : ""}" data-decision-tab="activity">
+            <span>Activity Log</span>
+            ${todays.length ? `<span class="home-focus-count">${doneCount}/${todays.length}</span>` : ""}
+          </button>
+        </div>
+        ${isDecisionsTab && pendingDecisions.length ? `<span class="home-focus-count">Requires Founder Sign-off</span>` : ""}
       </div>
+      ${isDecisionsTab ? renderExecutiveDecisionsGrid(pendingDecisions) : renderActivityLogList(todays)}
     </div>
   `;
 }
 
-// The home hero's central 3D metallic bot: a sleek titanium/platinum sphere with
-// embedded dark curved OLED visor, glowing neon capsule eyes, autonomous
-// looking/blinking, spring bounce jiggle, and real-time cursor tracking.
-function renderHomeBotFace() {
+function renderExecutiveDecisionsGrid(decisions) {
+  if (!decisions.length) {
+    return `
+      <div class="home-focus-empty" style="text-align: center; padding: 18px 0; font-size: 13px;">
+        🎉 All caught up! No pending executive decisions. Your agents are operating smoothly.
+      </div>
+    `;
+  }
   return `
-    <div class="metallic-bot-container" id="metallic-bot-slot" aria-label="CEO Agent 3D Metallic Bot"></div>
+    <div class="executive-decision-grid">
+      ${decisions.map((d) => `
+        <div class="decision-card" id="card-${d.id}" data-target-node="${d.targetOrbitNode}">
+          <div class="decision-card-top">
+            <span class="decision-dept-tag ${d.badgeClass}">${escapeHtml(d.category)}</span>
+            <span class="decision-agent-tag">${escapeHtml(d.agentName)}</span>
+          </div>
+          <h4 class="decision-title">${escapeHtml(d.title)}</h4>
+          <p class="decision-summary">${escapeHtml(d.summary)}</p>
+          <div class="decision-metric-bar">
+            <span class="decision-metric-val">${escapeHtml(d.metricValue)}</span>
+            <span class="decision-confidence">${escapeHtml(d.confidence)}</span>
+          </div>
+          <div class="decision-actions">
+            <button type="button" class="btn-approve" data-approve-decision="${d.id}">
+              ✓ ${escapeHtml(d.primaryAction)}
+            </button>
+            <button type="button" class="btn-dismiss" data-dismiss-decision="${d.id}" title="Dismiss">
+              Dismiss
+            </button>
+          </div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderActivityLogList(todays) {
+  return `
+    <div class="home-focus-list">
+      ${
+        todays.length
+          ? todays
+              .map(
+                (r) => `
+        <button type="button" class="home-focus-row" data-open-run="${r.id}">
+          <span class="home-focus-check ${r.status}">${r.status === "success" ? icon("check") : ""}</span>
+          <span class="home-focus-text">${escapeHtml(truncate(r.goal, 64))}</span>
+          <span class="home-focus-time">${new Date(r.createdAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</span>
+        </button>
+      `,
+              )
+              .join("")
+          : `<div class="home-focus-empty">Nothing run yet today — try the composer above.</div>`
+      }
+    </div>
+  `;
+}
+
+// Features 1 & 4: Central 3D Bot with Ambient Halo and Mode Selector Pill
+function renderHomeBotFace() {
+  const currentMode = window.GeometricBot?.getCurrentMode?.();
+  const activeIdx = currentMode ? currentMode.index : 0;
+  return `
+    <div class="bot-ambient-halo" id="bot-ambient-halo" aria-hidden="true"></div>
+    <div class="metallic-bot-container geometric-bot-container" id="metallic-bot-slot" aria-label="CEO Agent 3D Geometric Bot"></div>
+    <div class="bot-mode-selector" id="bot-mode-selector" role="tablist" aria-label="Co-Founder Working Mode">
+      <button type="button" class="bot-mode-btn ${activeIdx === 0 ? "active" : ""}" data-bot-mode="0" title="Strategy & Vision Mode">
+        <span class="mode-dot dot-strategy"></span>
+        <span class="mode-label">Strategy</span>
+      </button>
+      <button type="button" class="bot-mode-btn ${activeIdx === 1 ? "active" : ""}" data-bot-mode="1" title="Velocity & Execution Mode">
+        <span class="mode-dot dot-velocity"></span>
+        <span class="mode-label">Velocity</span>
+      </button>
+      <button type="button" class="bot-mode-btn ${activeIdx === 2 ? "active" : ""}" data-bot-mode="2" title="Analytics & Diligence Mode">
+        <span class="mode-dot dot-analytics"></span>
+        <span class="mode-label">Analytics</span>
+      </button>
+    </div>
   `;
 }
 
@@ -2632,44 +2741,51 @@ function renderActiveChatThread() {
 
   return `
     <div class="chat-thread-container">
-      <!-- Active Chat Header -->
+      <!-- Active Chat Header (Responsive Non-Overlapping Layout) -->
       <header class="chat-thread-header">
-        <button type="button" class="chat-mobile-back" id="chat-back-btn" title="Back to conversations">
-          ${icon("arrow-left")}
-        </button>
+        <div class="chat-thread-header-row">
+          <div class="chat-thread-left">
+            <button type="button" class="chat-mobile-back" id="chat-back-btn" title="Back to conversations">
+              ${icon("arrow-left")}
+            </button>
 
-        <div class="chat-thread-avatar" style="background:${color}">
-          ${icon(deptMeta(run.agentKey)?.icon || "bot")}
+            <div class="chat-thread-avatar" style="background:${color}">
+              ${icon(deptMeta(run.agentKey)?.icon || "bot")}
+            </div>
+
+            <div class="chat-thread-identity">
+              <span class="chat-thread-agent-label">${escapeHtml(deptLabel(run.agentKey))}</span>
+              <span class="status-badge ${run.status}">
+                ${run.status === "running" ? `<span class="badge-pulse"></span>` : ""}${run.status}
+              </span>
+            </div>
+          </div>
+
+          <!-- Action Buttons -->
+          <div class="chat-thread-actions">
+            <button type="button" class="chat-action-btn${run.pinned ? " is-pinned" : ""}" id="chat-thread-pin-btn" title="${run.pinned ? "Unpin conversation" : "Pin conversation"}">
+              ${icon("pin")}
+            </button>
+            <button type="button" class="chat-action-btn" id="chat-thread-copy-btn" title="Copy full transcript">
+              ${icon("copy")}
+            </button>
+            ${
+              run.status === "running"
+                ? `<button type="button" class="chat-action-btn stop" id="chat-stop-btn" ${state.cancelBusy ? "disabled" : ""}>${icon("square")} <span class="btn-text">${state.cancelBusy ? "Stopping..." : "Stop"}</span></button>`
+                : ""
+            }
+            <button type="button" class="chat-action-btn danger" id="chat-thread-delete-btn" title="Delete conversation">
+              ${icon("trash-2")}
+            </button>
+          </div>
         </div>
 
-        <div class="chat-thread-title-col">
-          <div class="chat-thread-meta-row">
-            <span class="chat-thread-agent-label">${escapeHtml(deptLabel(run.agentKey))}</span>
-            <span class="status-badge ${run.status}">
-              ${run.status === "running" ? `<span class="badge-pulse"></span>` : ""}${run.status}
-            </span>
+        <div class="chat-thread-subrow">
+          <h1 class="chat-thread-goal">${escapeHtml(run.goal)}</h1>
+          <div class="chat-thread-meta">
             ${run.costUsd != null ? `<span class="chat-thread-cost">${formatCost(run.costUsd)}</span>` : ""}
             <span class="chat-thread-time">Started ${formatDateTime(run.createdAt)}${run.finishedAt ? ` · Finished ${formatDateTime(run.finishedAt)}` : ""}</span>
           </div>
-          <h1 class="chat-thread-goal">${escapeHtml(run.goal)}</h1>
-        </div>
-
-        <!-- Action Buttons -->
-        <div class="chat-thread-actions">
-          <button type="button" class="chat-action-btn${run.pinned ? " is-pinned" : ""}" id="chat-thread-pin-btn" title="${run.pinned ? "Unpin conversation" : "Pin conversation"}">
-            ${icon("pin")}
-          </button>
-          <button type="button" class="chat-action-btn" id="chat-thread-copy-btn" title="Copy full transcript">
-            ${icon("copy")}
-          </button>
-          ${
-            run.status === "running"
-              ? `<button type="button" class="chat-action-btn stop" id="chat-stop-btn" ${state.cancelBusy ? "disabled" : ""}>${icon("square")} <span>${state.cancelBusy ? "Stopping..." : "Stop"}</span></button>`
-              : ""
-          }
-          <button type="button" class="chat-action-btn danger" id="chat-thread-delete-btn" title="Delete conversation">
-            ${icon("trash-2")}
-          </button>
         </div>
       </header>
 
@@ -3420,11 +3536,61 @@ function toggleToolCard(toolUseId) {
   render();
 }
 
+// Feature 2: Agent Handoff Trajectory Beam Animation
+function launchHandoffBeam(fromSelector, targetQuickAction) {
+  const fromEl = document.querySelector(fromSelector);
+  const targetCard = document.querySelector(`[data-quick-action="${targetQuickAction}"]`) ||
+                     document.querySelector(".orbit-sphere") ||
+                     document.body;
+  if (!fromEl || !targetCard) return;
+
+  const r1 = fromEl.getBoundingClientRect();
+  const r2 = targetCard.getBoundingClientRect();
+
+  const startX = r1.left + r1.width * 0.5;
+  const startY = r1.top + r1.height * 0.5;
+  const endX = r2.left + r2.width * 0.5;
+  const endY = r2.top + r2.height * 0.5;
+
+  const packet = document.createElement("div");
+  packet.className = "handoff-beam-packet";
+  packet.style.left = `${startX}px`;
+  packet.style.top = `${startY}px`;
+  packet.style.setProperty("--tx", `${endX - startX}px`);
+  packet.style.setProperty("--ty", `${endY - startY}px`);
+
+  document.body.appendChild(packet);
+
+  packet.addEventListener("animationend", () => {
+    packet.remove();
+    if (targetCard && targetCard.classList) {
+      targetCard.classList.add("is-receiving-task");
+      setTimeout(() => targetCard.classList.remove("is-receiving-task"), 1300);
+    }
+  });
+}
+
 async function submitGoal(goal) {
   state.composerBusy = true;
   state.composerError = null;
-  render();
+
+  // Feature 1: Living Co-founder enters working scanning state
+  if (window.GeometricBot) {
+    window.GeometricBot.setMood("working", 5000);
+  }
+
+  // Feature 2: Agent Handoff Trajectory Beam to designated department node
   const targetAgent = state.composerTargetAgent;
+  let targetOrbitNode = "plan";
+  if (targetAgent === "developer") targetOrbitNode = "execute";
+  else if (targetAgent === "analysis") targetOrbitNode = "analyze";
+  else if (targetAgent === "sales") targetOrbitNode = "grow";
+  else if (targetAgent === "manager") targetOrbitNode = "improve";
+  else if (targetAgent === "research") targetOrbitNode = "research";
+
+  launchHandoffBeam("#metallic-bot-slot", targetOrbitNode);
+
+  render();
   const url = targetAgent ? `/api/agents/${targetAgent}/runs` : "/api/runs";
   try {
     const result = await fetchJSON(url, {
@@ -3436,6 +3602,10 @@ async function submitGoal(goal) {
     state.composerAttachments = [];
     state.composerTargetAgent = null;
     await loadAll(true);
+    // Feature 1: Bot celebratory bounce on task start
+    if (window.GeometricBot) {
+      window.GeometricBot.celebrate();
+    }
     if (result?.id) openRun(result.id);
     else showToast("Task started.");
   } catch (err) {
@@ -3543,7 +3713,7 @@ function initFlurryBotInteraction() {
 }
 
 function attachHandlers() {
-  const botEngine = window.MetallicBot || window.FluffyBot;
+  const botEngine = window.GeometricBot || window.MetallicBot || window.FluffyBot;
   if (botEngine) {
     const slot = document.getElementById("metallic-bot-slot") || document.getElementById("fluffy-bot-slot");
     if (slot) botEngine.mount(slot);
@@ -4090,6 +4260,72 @@ function attachHandlers() {
     submitGoal(goal);
   });
 
+  // Feature 2: Executive Decision tab switcher
+  document.querySelectorAll("[data-decision-tab]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.homeCardTab = btn.dataset.decisionTab;
+      render();
+    });
+  });
+
+  // Feature 2: Approve Executive Decision & launch handoff beam
+  document.querySelectorAll("[data-approve-decision]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.approveDecision;
+      const dec = (state.executiveDecisions || []).find((d) => d.id === id);
+      if (!dec) return;
+
+      // 1. Bot celebration jump
+      if (window.GeometricBot) {
+        window.GeometricBot.celebrate();
+      }
+
+      // 2. Trajectory handoff beam to target orbit capability node
+      launchHandoffBeam("#metallic-bot-slot", dec.targetOrbitNode);
+
+      // 3. Mark approved
+      dec.status = "approved";
+
+      // 4. Create synthetic run in state so it appears in activity
+      const newRun = {
+        id: "run-dec-" + Date.now(),
+        goal: `[Executive Approved] ${dec.title}: ${dec.summary}`,
+        status: "success",
+        createdAt: new Date().toISOString(),
+        departmentKey: dec.targetOrbitNode === "execute" ? "developer" : (dec.targetOrbitNode === "grow" ? "sales" : "analysis"),
+      };
+      state.runs.unshift(newRun);
+
+      showToast(`Approved: ${dec.title}`);
+      render();
+    });
+  });
+
+  // Feature 2: Dismiss Executive Decision
+  document.querySelectorAll("[data-dismiss-decision]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.dismissDecision;
+      const dec = (state.executiveDecisions || []).find((d) => d.id === id);
+      if (dec) {
+        dec.status = "dismissed";
+        showToast("Decision dismissed.");
+        render();
+      }
+    });
+  });
+
+  // Features 1 & 4: Co-Founder Working Mode Selector Pills
+  document.querySelectorAll("[data-bot-mode]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const modeIdx = Number(btn.dataset.botMode);
+      if (window.GeometricBot) {
+        window.GeometricBot.setShape(modeIdx);
+      }
+    });
+  });
+
   document.getElementById("modal-overlay")?.addEventListener("click", (e) => {
     if (e.target.id === "modal-overlay") closeModal();
   });
@@ -4133,11 +4369,25 @@ function attachGlobalKeyboardShortcut() {
   });
 }
 
+// Feature 1 & 4: Sync mode selector button active state when bot changes mode
+function attachBotModeListener() {
+  window.addEventListener("ceo-bot-mode-change", (e) => {
+    const detail = e.detail;
+    if (!detail) return;
+    document.querySelectorAll("[data-bot-mode]").forEach((btn) => {
+      const idx = Number(btn.dataset.botMode);
+      if (idx === detail.index) btn.classList.add("active");
+      else btn.classList.remove("active");
+    });
+  });
+}
+
 // ---------- init ----------
 
 initTheme();
 attachOutsideClickHandler();
 attachGlobalKeyboardShortcut();
+attachBotModeListener();
 loadAll();
 setInterval(() => loadAll(true), POLL_MS);
 setInterval(() => {

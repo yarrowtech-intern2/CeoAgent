@@ -4,6 +4,11 @@
 // autonomous glancing/blinking, and elastic spring physics. ZERO IMAGES & ZERO RINGS.
 
 (function () {
+  if (window.GeometricBot) {
+    window.MetallicBot = window.GeometricBot;
+    window.FluffyBot = window.GeometricBot;
+    return;
+  }
   let activeInstance = null;
 
   class MetallicBot {

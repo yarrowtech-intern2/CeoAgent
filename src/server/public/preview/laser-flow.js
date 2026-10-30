@@ -976,6 +976,12 @@ function mount(container, options = {}) {
       haloMat.needsUpdate = true;
       particleMaterial.needsUpdate = true;
     },
+    setAccentColor(r, g, b) {
+      if (typeof r === "number" && typeof g === "number" && typeof b === "number") {
+        targetTheme.haloCore = [r, g, b];
+        targetTheme.particleCore = [Math.min(1.0, r * 1.2), Math.min(1.0, g * 1.2), Math.min(1.0, b * 1.2)];
+      }
+    },
     syncSphere: syncSpherePosition,
     pause() {
       isPaused = true;
