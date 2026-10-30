@@ -217,6 +217,10 @@ const state = {
   chatFilterStatus: "all", // "all" | "running" | "success" | "error" | "pinned"
   chatFilterAgent: "all", // "all" | department key
   chatDraftGoal: "",
+  chatListCollapsed: (() => {
+    try { return localStorage.getItem("chatListCollapsed") === "1"; } catch { return false; }
+  })(),
+  chatMobileNew: false, // mobile only: show the new-chat canvas instead of the conversation list
   chatDraftAgent: "ceo",
   chatDraftProvider: "auto",
   chatDraftAttachments: [],
@@ -300,7 +304,7 @@ async function loadAll(silent) {
       state.loadError = null;
       if (!state.departments || !state.departments.length) {
         state.departments = [
-          { key: "ceo", label: "Chief Executive Officer", color: "#6366f1" },
+          { key: "ceo", label: "Chief Executive Officer", color: "#c25e1a" },
           { key: "developer", label: "Lead Developer", color: "#10b981" },
           { key: "product", label: "Head of Product", color: "#3b82f6" },
           { key: "marketing", label: "Head of Marketing", color: "#f59e0b" },
@@ -364,6 +368,7 @@ function deptMeta(key) {
 }
 
 function deptColor(key) {
+  if (key === "ceo") return state.theme === "dark" ? "#ea7a35" : "#c25e1a";
   const meta = deptMeta(key);
   return meta ? meta.color[state.theme] : "var(--accent)";
 }
@@ -665,7 +670,7 @@ function ensureLaserFlowEl() {
 }
 
 function laserFlowAccent() {
-  return getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#6d5bf6";
+  return getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#c25e1a";
 }
 
 function destroyLaserFlow() {
@@ -1418,7 +1423,7 @@ function renderAgentsPage() {
       <!-- Workforce Metric Strip -->
       <div class="agents-metrics-strip">
         <div class="agents-metric-card">
-          <div class="agents-metric-icon" style="background:rgba(109,91,246,0.12);color:var(--accent)">
+          <div class="agents-metric-icon" style="background:color-mix(in srgb, var(--accent) 14%, transparent);color:var(--accent)">
             ${icon("users")}
           </div>
           <div class="agents-metric-data">
@@ -2471,9 +2476,17 @@ function renderChatPage() {
   const runningCount = allRuns.filter((r) => r.status === "running").length;
 
   return `
-    <div class="chat-split-layout">
+    <div class="chat-split-layout${state.openRunId || state.chatMobileNew ? " show-thread" : ""}${state.chatListCollapsed ? " list-collapsed" : ""}">
       <!-- Left Column: Conversations Explorer Sidebar -->
       <aside class="chat-sidebar">
+        <div class="chat-sidebar-rail">
+          <button type="button" class="chat-list-toggle" data-chat-list-toggle title="Show conversations">
+            ${icon("panel-left-open")}
+          </button>
+          <button type="button" class="chat-list-toggle" id="chat-new-rail-btn" title="New chat">
+            ${icon("plus")}
+          </button>
+        </div>
         <div class="chat-sidebar-head">
           <div class="chat-sidebar-title-row">
             <h2 class="chat-sidebar-title">
@@ -2481,6 +2494,9 @@ function renderChatPage() {
             </h2>
             <button type="button" class="chat-new-chat-btn" id="chat-new-btn">
               ${icon("plus")} <span>New Chat</span>
+            </button>
+            <button type="button" class="chat-list-toggle chat-list-collapse" data-chat-list-toggle title="Collapse conversations">
+              ${icon("panel-left-close")}
             </button>
           </div>
 
@@ -2699,11 +2715,14 @@ function renderActiveChatThread() {
 
 function renderNewChatCanvas() {
   const chosenAgent = state.chatDraftAgent || "ceo";
-  const activeDept = chosenAgent === "ceo" ? { label: "CEO Agent", icon: "sparkles", color: { light: "#6d5bf6", dark: "#8b7bff" } } : deptMeta(chosenAgent);
+  const activeDept = chosenAgent === "ceo" ? { label: "CEO Agent", icon: "sparkles", color: { light: "#c25e1a", dark: "#ea7a35" } } : deptMeta(chosenAgent);
   const color = activeDept ? activeDept.color[state.theme] || "var(--accent)" : "var(--accent)";
 
   return `
     <div class="chat-new-canvas">
+      <button type="button" class="chat-mobile-back chat-new-back" id="chat-back-btn" title="Back to conversations">
+        ${icon("arrow-left")}
+      </button>
       <div class="chat-new-hero">
         <div class="chat-new-emblem" style="--glow-color:${color}">
           <img src="/logo/icon.png" alt="" />
@@ -2718,7 +2737,7 @@ function renderNewChatCanvas() {
       <div class="chat-new-agent-picker">
         <div class="chat-picker-label">Select Recipient:</div>
         <div class="chat-picker-scroll">
-          <button type="button" class="chat-agent-pill${chosenAgent === "ceo" ? " active" : ""}" data-select-agent="ceo" style="--pill-color:#6d5bf6">
+          <button type="button" class="chat-agent-pill${chosenAgent === "ceo" ? " active" : ""}" data-select-agent="ceo" style="--pill-color:${state.theme === "dark" ? "#ea7a35" : "#c25e1a"}">
             ${icon("sparkles")} <span>CEO (Orchestrator)</span>
           </button>
           ${state.departments
@@ -3646,16 +3665,28 @@ function attachHandlers() {
       closeRunEventSource();
       state.openRunId = null;
       state.openRun = null;
+      state.chatMobileNew = false;
       render();
     });
   });
 
+  document.querySelectorAll("[data-chat-list-toggle]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.chatListCollapsed = !state.chatListCollapsed;
+      try { localStorage.setItem("chatListCollapsed", state.chatListCollapsed ? "1" : "0"); } catch {}
+      render();
+    });
+  });
+  document.getElementById("chat-new-rail-btn")?.addEventListener("click", () => {
+    document.getElementById("chat-new-btn")?.click();
+  });
   document.getElementById("chat-new-btn")?.addEventListener("click", () => {
     closeRunEventSource();
     state.openRunId = null;
     state.openRun = null;
     state.chatDraftGoal = "";
     state.chatDraftAttachments = [];
+    state.chatMobileNew = true;
     render();
     document.getElementById("chat-new-goal-input")?.focus();
   });

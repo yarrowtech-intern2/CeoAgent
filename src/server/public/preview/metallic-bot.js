@@ -175,7 +175,7 @@
         // Neon lavender glowing halo (enlarged)
         const haloGeom = new THREE.CapsuleGeometry(0.102, 0.22, 16, 24);
         const haloMat = new THREE.MeshBasicMaterial({
-          color: 0xc084fc,
+          color: 0xfb923c,
           transparent: true,
           opacity: 0.68,
           blending: THREE.AdditiveBlending,
@@ -186,7 +186,7 @@
         // Outer electric purple bloom (enlarged)
         const bloomGeom = new THREE.CapsuleGeometry(0.132, 0.24, 16, 24);
         const bloomMat = new THREE.MeshBasicMaterial({
-          color: 0xa855f7,
+          color: 0xea7a35,
           transparent: true,
           opacity: 0.38,
           blending: THREE.AdditiveBlending,
@@ -206,7 +206,7 @@
       this.eyesGroup.add(this.rightEye);
 
       // Eye point light that illuminates the visor face
-      this.eyeLight = new THREE.PointLight(0xc084fc, 2.2, 3.0);
+      this.eyeLight = new THREE.PointLight(0xf97316, 2.2, 3.0);
       this.eyeLight.position.set(0, 0, 0.12);
       this.eyesGroup.add(this.eyeLight);
     }
@@ -220,7 +220,7 @@
       this.scene.add(this.keyLight);
 
       // Rim light: electric lavender/purple edge contour
-      this.rimLight = new THREE.DirectionalLight(0xc084fc, 3.2);
+      this.rimLight = new THREE.DirectionalLight(0xea7a35, 3.2);
       this.rimLight.position.set(3.5, -2.0, -3.5);
       this.scene.add(this.rimLight);
 
@@ -235,7 +235,7 @@
       this.scene.add(this.glassLight);
 
       // Ambient environment fill
-      this.ambientLight = new THREE.AmbientLight(0xa39ec4, 2.0);
+      this.ambientLight = new THREE.AmbientLight(0xc2bcaf, 2.0);
       this.scene.add(this.ambientLight);
     }
 
@@ -245,15 +245,15 @@
 
       if (isDark) {
         // Dark theme: Sleek Gunmetal / Titanium Chrome
-        this.bodyMat.color.setHex(0x28263a);
+        this.bodyMat.color.setHex(0x232226);
         this.bodyMat.metalness = 0.65;
         this.bodyMat.roughness = 0.26;
         this.bodyMat.clearcoat = 1.0;
         this.bodyMat.clearcoatRoughness = 0.12;
-        this.ambientLight.color.setHex(0x353250);
+        this.ambientLight.color.setHex(0x2c2622);
         this.ambientLight.intensity = 1.6;
         this.keyLight.intensity = 3.0;
-        this.rimLight.color.setHex(0xc084fc);
+        this.rimLight.color.setHex(0xea7a35);
         this.rimLight.intensity = 4.0;
       } else {
         // Light theme: Gleaming Liquid Chrome / Platinum Silver

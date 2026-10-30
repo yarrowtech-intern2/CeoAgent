@@ -16,7 +16,7 @@ const PLAYBOOK_TYPE_LABELS = {
   "email-script": "Email script",
 };
 const PLAYBOOK_TYPE_COLORS = {
-  "ai-generative": "#6d5bf6",
+  "ai-generative": "#c25e1a",
   image: "#0891b2",
   carousel: "#e87ba4",
   video: "#eda100",

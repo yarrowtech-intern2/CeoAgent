@@ -46,8 +46,8 @@
   --text: #26263a;
   --text-muted: #6b6b7c;
   --text-faint: #9d9dab;
-  --accent: #6d5bf6;
-  --accent-soft: #ece9ff;
+  --accent: #c25e1a;
+  --accent-soft: #faede4;
   --success: #17b26a;
   --warning: #ffb020;
   --error: #e5484d;
@@ -92,8 +92,8 @@
     --text: #f2f2f5;
     --text-muted: #a6a6b5;
     --text-faint: #6f6f7f;
-    --accent: #8b7bff;
-    --accent-soft: #292352;
+    --accent: #ea7a35;
+    --accent-soft: #381e13;
 
     --bento-mint: #1c1c26;
     --bento-mint-ink: #f2f2f5;
