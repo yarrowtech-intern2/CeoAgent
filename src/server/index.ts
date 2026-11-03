@@ -11,7 +11,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadSettingsIntoEnv, getMaskedSettings, updateSettings, getEnvValue } from "./settings.js";
 import {
   clearSessionCookie,
+  completeErpSignIn,
   createOAuthStateToken,
+  findTenantByErpOrgId,
   findTenantByOrganizationId,
   getPublicAuthConfig,
   isSupabaseAuthConfigured,
@@ -20,7 +22,9 @@ import {
   requireAutomationTenant,
   restoreTenant,
   resolveAuthFlowTenant,
+  setErpSessionCookie,
   setSessionCookie,
+  verifyErpHandoff,
   getUiTheme,
   setUiTheme,
   UI_THEMES,
@@ -208,7 +212,7 @@ const limitHandler = (_req: express.Request, res: express.Response) => {
 const apiLimiter = rateLimit({ windowMs: 60_000, limit: Number(process.env.RATE_LIMIT_API_PER_MIN) || 600, standardHeaders: "draft-7", legacyHeaders: false, handler: limitHandler });
 const runLimiter = rateLimit({ windowMs: 60_000, limit: Number(process.env.RATE_LIMIT_RUNS_PER_MIN) || 20, standardHeaders: "draft-7", legacyHeaders: false, handler: limitHandler });
 const authLimiter = rateLimit({ windowMs: 15 * 60_000, limit: 50, standardHeaders: "draft-7", legacyHeaders: false, handler: limitHandler });
-app.use(["/api", "/webhook", "/auth"], apiLimiter);
+app.use(["/api", "/webhook", "/auth", "/sso"], apiLimiter);
 app.use("/api/auth/session", authLimiter);
 app.post(["/api/runs", "/api/agents/:key/runs", "/api/automation/runs", "/api/automation/agents/:key/runs", "/api/runs/:id/reply"], runLimiter);
 // Generous headroom for bulk attachments: each parsed file caps at 50,000
@@ -291,6 +295,72 @@ app.get("/api/auth/me", (req, res) => {
   readRequestTenant(req)
     .then((tenant) => res.json(tenant))
     .catch(() => res.status(401).json({ error: "authentication required" }));
+});
+
+// Entry point for the ERP's "open in CEO Agent" button: the ERP's backend
+// (never its frontend) signs a short-lived handoff token with the shared
+// ERP_SSO_SECRET and redirects the browser here. No Supabase credentials
+// are involved — see the ERP SSO bridge comment in auth.ts. GET renders a
+// consent prompt (first-time: "create and link your org"; returning: "sign
+// in"); only the POST from clicking Allow actually provisions/links the org
+// and signs the browser in, so the ERP can never silently create accounts.
+app.use("/sso", express.urlencoded({ extended: false }));
+
+function escapeHtmlAttr(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function ssoErrorPage(res: express.Response, message: string) {
+  res.status(401).send(`<!doctype html><html><body style="font-family:sans-serif;max-width:480px;margin:10vh auto;text-align:center">
+    <h2>Sign-in link invalid</h2><p>${escapeHtmlAttr(message)}</p><p>Go back to the ERP and click the button again.</p>
+  </body></html>`);
+}
+
+app.get("/sso/erp", (req, res) => {
+  const token = typeof req.query.token === "string" ? req.query.token : "";
+  if (!token) {
+    ssoErrorPage(res, "Missing token.");
+    return;
+  }
+  let claims;
+  try {
+    claims = verifyErpHandoff(token);
+  } catch (err) {
+    ssoErrorPage(res, err instanceof Error ? err.message : "Invalid SSO token");
+    return;
+  }
+  const existingOrg = findTenantByErpOrgId(claims.erpOrgId);
+  const heading = existingOrg
+    ? `Sign in to CEO Agent as ${escapeHtmlAttr(claims.email ?? claims.name ?? "this account")}?`
+    : `Create a CEO Agent organization for ${escapeHtmlAttr(claims.orgName ?? "your company")}?`;
+  const body = existingOrg
+    ? `You'll be signed in to the CEO Agent org already linked to this account.`
+    : `This creates a new CEO Agent org linked to this ERP account. CEO Agent will have access to the data and tools you connect to it (CRM, email, marketing channels, analytics) to automate marketing and other tasks on your behalf.`;
+  res.send(`<!doctype html><html><body style="font-family:sans-serif;max-width:480px;margin:10vh auto;text-align:center">
+    <h2>${heading}</h2>
+    <p>${body}</p>
+    <form method="POST" action="/sso/erp" style="display:inline-block;margin-right:8px">
+      <input type="hidden" name="token" value="${escapeHtmlAttr(token)}" />
+      <button type="submit" style="padding:10px 20px;font-size:1rem">Allow</button>
+    </form>
+    <a href="javascript:window.close()||history.back()" style="padding:10px 20px;font-size:1rem">Cancel</a>
+  </body></html>`);
+});
+
+app.post("/sso/erp", (req, res) => {
+  const token = typeof req.body?.token === "string" ? req.body.token : "";
+  if (!token) {
+    ssoErrorPage(res, "Missing token.");
+    return;
+  }
+  try {
+    const claims = verifyErpHandoff(token);
+    const tenant = completeErpSignIn(claims);
+    setErpSessionCookie(res, tenant.organizationId);
+    res.redirect("/");
+  } catch (err) {
+    ssoErrorPage(res, err instanceof Error ? err.message : "Invalid SSO token");
+  }
 });
 
 app.use("/api/automation", requireAutomationTenant);

@@ -414,6 +414,19 @@
       this.setMood("celebrating", 2400);
     }
 
+    // Game hooks ------------------------------------------------------
+    defeat(ms = 2600) {
+      this.setMood("defeated", ms);
+      this.physics.scale.y = 0.8;
+      this.physics.scale.x = 1.1;
+      this.physics.scale.z = 1.1;
+    }
+
+    // x, y are eye-space offsets (about -0.45 .. 0.45); clamped to the body below.
+    lookAt(x, y, ms = 1200) {
+      this.gaze = { x, y, until: performance.now() + ms };
+    }
+
     setShape(idx) {
       if (idx < 0 || idx >= SHAPES.length) return;
       if (this.morph.currentIdx === idx && !this.morph.isMorphing) return;
@@ -580,7 +593,17 @@
       // 2. Compute Target Position based on Mood & Cursor
       let rawX = 0, rawY = 0;
 
-      if (this.mood === "typing") {
+      if (this.gaze && now < this.gaze.until) {
+        // Game hook: look at a specific spot (e.g. the cell the player just played)
+        rawX = this.gaze.x;
+        rawY = this.gaze.y;
+        this.eyes.targetScaleX = 1.1;
+      } else if (this.mood === "defeated") {
+        // Game hook: dejected — eyes cast down
+        rawX = this.mouse.nx * 0.10;
+        rawY = -0.24;
+        this.eyes.targetScaleX = 0.9;
+      } else if (this.mood === "typing") {
         // Living Co-founder is attentively focused on user typing in the composer below
         rawX = this.mouse.nx * 0.18;
         rawY = -0.22 + this.mouse.ny * 0.08;
@@ -674,6 +697,8 @@
       let extraTiltX = 0;
       if (this.mood === "typing") {
         extraTiltX = -0.12; // Attentive tilt forward to listen to typing
+      } else if (this.mood === "defeated") {
+        extraTiltX = 0.28; // Head hangs
       }
 
       this.physics.targetRot.y = this.mouse.nx * 0.22;
@@ -839,6 +864,12 @@
     },
     celebrate() {
       if (activeInstance) activeInstance.celebrate();
+    },
+    defeat(ms) {
+      if (activeInstance) activeInstance.defeat(ms);
+    },
+    lookAt(x, y, ms) {
+      if (activeInstance) activeInstance.lookAt(x, y, ms);
     },
     setShape(idx) {
       if (activeInstance) activeInstance.setShape(idx);

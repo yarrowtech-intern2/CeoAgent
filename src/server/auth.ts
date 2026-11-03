@@ -273,7 +273,163 @@ export function findTenantByOrganizationId(organizationId: string): TenantContex
 export async function readRequestTenant(req: express.Request): Promise<TenantContext> {
   const token = readCookie(req, COOKIE_NAME) ?? req.header("authorization")?.replace(/^Bearer\s+/i, "");
   if (!token) throw new Error("Missing session");
+  if (token.startsWith(ERP_SESSION_PREFIX)) return verifyErpSessionCookieValue(token);
   return tenantForUser(await verifyAccessToken(token));
+}
+
+// --- ERP single-sign-on bridge ------------------------------------------
+//
+// Lets an ERP (its own, separate login system) redirect a signed-in user
+// straight into CEO Agent, auto-provisioning that company's CEO Agent org
+// on first click, without the user ever typing Supabase credentials. Three
+// pieces, not to be confused with each other:
+//
+//  1. The ERP -> CEO Agent *handoff* token (verifyErpHandoff): minted by the
+//     ERP's own backend, signed with ERP_SSO_SECRET — a secret shared only
+//     between this server's process env and that ERP's backend (set once by
+//     whoever operates both systems; see .env). It must be a single shared
+//     secret, not a per-org one, because at verification time no CEO Agent
+//     org may exist yet for this ERP company — that's the whole point of
+//     auto-provisioning. Carries which ERP company + user is signing in.
+//  2. tenantForErpOrg: finds-or-creates the CEO Agent org for that ERP
+//     company (keyed by the ERP's own stable company id, `erpOrgId` —
+//     never by email/name, which can change). First click creates it.
+//  3. The CEO Agent *session* cookie value this produces (ERP_SESSION_PREFIX):
+//     signed with a server-process secret, scoped only to "which org", and
+//     is what readRequestTenant above recognizes on every later request —
+//     it never touches Supabase.
+//
+// A real Supabase access token is a JWT (always two dots, no fixed prefix),
+// so the ERP_SESSION_PREFIX string can never collide with one.
+//
+// The consent step (user must explicitly accept before the org is created /
+// linked) lives in index.ts's GET/POST /sso/erp handlers: GET verifies the
+// token and renders a confirm page, POST (only reached by the user clicking
+// Allow) calls completeErpSignIn below.
+const ERP_SESSION_PREFIX = "erpsso:";
+const ERP_SESSION_SECRET = randomBytes(32);
+const ERP_SESSION_TTL_SEC = 60 * 60;
+
+function signErpSession(payload: string): string {
+  return createHmac("sha256", ERP_SESSION_SECRET).update(payload).digest("base64url");
+}
+
+function createErpSessionValue(organizationId: string): string {
+  const payload = Buffer.from(
+    JSON.stringify({ o: organizationId, e: Date.now() + ERP_SESSION_TTL_SEC * 1000 }),
+  ).toString("base64url");
+  return `${ERP_SESSION_PREFIX}${payload}.${signErpSession(payload)}`;
+}
+
+function verifyErpSessionCookieValue(token: string): TenantContext {
+  const body = token.slice(ERP_SESSION_PREFIX.length);
+  const [payload, signature] = body.split(".");
+  if (!payload || !signature) throw new Error("Malformed ERP session");
+  const expected = signErpSession(payload);
+  const expectedBuf = Buffer.from(expected);
+  const actualBuf = Buffer.from(signature);
+  if (actualBuf.length !== expectedBuf.length || !timingSafeEqual(actualBuf, expectedBuf)) {
+    throw new Error("Invalid ERP session");
+  }
+  const { o: organizationId, e: expiresAt } = JSON.parse(Buffer.from(payload, "base64url").toString("utf-8")) as {
+    o: string;
+    e: number;
+  };
+  if (Date.now() > expiresAt) throw new Error("ERP session expired — please click through from the ERP again");
+  const tenant = findTenantByOrganizationId(organizationId);
+  if (!tenant) throw new Error("Unknown organization for ERP session");
+  return tenant;
+}
+
+export function setErpSessionCookie(res: express.Response, organizationId: string) {
+  res.setHeader(
+    "Set-Cookie",
+    `${COOKIE_NAME}=${encodeURIComponent(createErpSessionValue(organizationId))}; ${cookieOptions(ERP_SESSION_TTL_SEC)}`,
+  );
+}
+
+export interface ErpHandoffClaims {
+  /** Stable id of the company/tenant inside the ERP — NOT the end user's id. One CEO Agent org per erpOrgId. */
+  erpOrgId: string;
+  erpUserId: string;
+  email?: string;
+  name?: string;
+  /** Display name for the CEO Agent org, used only the first time this erpOrgId is seen. */
+  orgName?: string;
+}
+
+/**
+ * Verifies a one-time handoff token minted by the ERP's backend. `token` is
+ * `<base64url JSON payload>.<base64url HMAC-SHA256 signature>`, signed with
+ * ERP_SSO_SECRET (server env — shared with the ERP's backend only, never
+ * exposed to its frontend). The payload must include `exp` (epoch ms); 5
+ * minutes is plenty since the ERP mints it immediately before redirecting.
+ * Deliberately does NOT create or touch any tenant — that only happens once
+ * the user accepts the consent prompt (completeErpSignIn, below).
+ */
+export function verifyErpHandoff(token: string): ErpHandoffClaims {
+  const secret = process.env.ERP_SSO_SECRET;
+  if (!secret) throw new Error("ERP SSO is not configured on this server — set ERP_SSO_SECRET");
+  const [payload, signature] = token.split(".");
+  if (!payload || !signature) throw new Error("Malformed SSO token");
+  const expected = createHmac("sha256", secret).update(payload).digest("base64url");
+  const expectedBuf = Buffer.from(expected);
+  const actualBuf = Buffer.from(signature);
+  if (actualBuf.length !== expectedBuf.length || !timingSafeEqual(actualBuf, expectedBuf)) {
+    throw new Error("Invalid SSO signature");
+  }
+  const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf-8")) as ErpHandoffClaims & {
+    exp: number;
+  };
+  if (typeof claims.exp !== "number" || Date.now() > claims.exp) throw new Error("SSO token expired — click the button again");
+  if (!claims.erpOrgId || !claims.erpUserId) throw new Error("SSO token missing erpOrgId/erpUserId");
+  return claims;
+}
+
+/** Finds the CEO Agent org already linked to this ERP company, if any — read-only, used to render the consent page. */
+export function findTenantByErpOrgId(erpOrgId: string): TenantContext | undefined {
+  return readTenants().users[`erp:${erpOrgId}`];
+}
+
+/**
+ * Called only after the user accepts the consent prompt. Finds the CEO
+ * Agent org already linked to this ERP company (by erpOrgId), or creates
+ * one on first use. Returns the tenant to log the browser into.
+ */
+export function completeErpSignIn(claims: ErpHandoffClaims): TenantContext {
+  const data = readTenants();
+  const key = `erp:${claims.erpOrgId}`;
+  const existing = data.users[key];
+  if (existing) {
+    let changed = false;
+    if (claims.email && claims.email !== existing.email) {
+      existing.email = claims.email;
+      changed = true;
+    }
+    if (claims.name && claims.name !== existing.name) {
+      existing.name = claims.name;
+      changed = true;
+    }
+    if (changed) {
+      existing.updatedAt = new Date().toISOString();
+      writeTenants(data);
+    }
+    return existing;
+  }
+
+  const now = new Date().toISOString();
+  const record: TenantRecord = {
+    userId: key,
+    email: claims.email ?? "",
+    name: claims.name ?? "",
+    organizationId: randomUUID(),
+    organizationName: claims.orgName ?? "My Organization",
+    createdAt: now,
+    updatedAt: now,
+  };
+  data.users[key] = record;
+  writeTenants(data);
+  return record;
 }
 
 declare global {
