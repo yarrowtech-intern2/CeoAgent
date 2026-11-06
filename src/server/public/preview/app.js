@@ -1183,19 +1183,23 @@ function renderHomeBotFace() {
   const activeIdx = currentMode ? currentMode.index : 0;
   return `
     <div class="bot-ambient-halo" id="bot-ambient-halo" aria-hidden="true"></div>
-    <div class="metallic-bot-container geometric-bot-container" id="metallic-bot-slot" aria-label="CEO Agent 3D Geometric Bot"></div>
-    <div class="bot-mode-selector" id="bot-mode-selector" role="tablist" aria-label="Co-Founder Working Mode">
-      <button type="button" class="bot-mode-btn ${activeIdx === 0 ? "active" : ""}" data-bot-mode="0" title="Strategy & Vision Mode">
-        <span class="mode-dot dot-strategy"></span>
-        <span class="mode-label">Strategy</span>
+    <div class="metallic-bot-container geometric-bot-container" id="metallic-bot-slot" aria-label="CEO Agent 3D Expressive Bot"></div>
+    <div class="bot-mode-selector" id="bot-mode-selector" role="tablist" aria-label="Co-Founder Mood & State">
+      <button type="button" class="bot-mode-btn ${activeIdx === 0 ? "active" : ""}" data-bot-mode="0" title="Ready & Friendly (Orange)">
+        <span class="mode-dot dot-ready"></span>
+        <span class="mode-label">Ready</span>
       </button>
-      <button type="button" class="bot-mode-btn ${activeIdx === 1 ? "active" : ""}" data-bot-mode="1" title="Velocity & Execution Mode">
-        <span class="mode-dot dot-velocity"></span>
-        <span class="mode-label">Velocity</span>
+      <button type="button" class="bot-mode-btn ${activeIdx === 1 ? "active" : ""}" data-bot-mode="1" title="Thinking & Working (Blue)">
+        <span class="mode-dot dot-thinking"></span>
+        <span class="mode-label">Thinking</span>
       </button>
-      <button type="button" class="bot-mode-btn ${activeIdx === 2 ? "active" : ""}" data-bot-mode="2" title="Analytics & Diligence Mode">
-        <span class="mode-dot dot-analytics"></span>
-        <span class="mode-label">Analytics</span>
+      <button type="button" class="bot-mode-btn ${activeIdx === 2 ? "active" : ""}" data-bot-mode="2" title="Goal Done & Celebrating (Purple)">
+        <span class="mode-dot dot-celebrate"></span>
+        <span class="mode-label">Celebrate</span>
+      </button>
+      <button type="button" class="bot-mode-btn ${activeIdx === 3 ? "active" : ""}" data-bot-mode="3" title="Attention & Review (Yellow)">
+        <span class="mode-dot dot-review"></span>
+        <span class="mode-label">Review</span>
       </button>
     </div>
   `;
@@ -3574,10 +3578,8 @@ async function submitGoal(goal) {
   state.composerBusy = true;
   state.composerError = null;
 
-  // Feature 1: Living Co-founder enters working scanning state
-  if (window.GeometricBot) {
-    window.GeometricBot.setMood("working", 5000);
-  }
+  // The bot reacts on its own: "oh!" on submit, thinking while the run is
+  // going, laugh/grumpy when it finishes (geometric-bot.js watches state.runs).
 
   // Feature 2: Agent Handoff Trajectory Beam to designated department node
   const targetAgent = state.composerTargetAgent;
@@ -3602,10 +3604,6 @@ async function submitGoal(goal) {
     state.composerAttachments = [];
     state.composerTargetAgent = null;
     await loadAll(true);
-    // Feature 1: Bot celebratory bounce on task start
-    if (window.GeometricBot) {
-      window.GeometricBot.celebrate();
-    }
     if (result?.id) openRun(result.id);
     else showToast("Task started.");
   } catch (err) {

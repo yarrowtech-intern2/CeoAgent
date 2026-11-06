@@ -8,7 +8,7 @@ Node.js/Express server from `dist/server/index.js`, serves the UI from
 
 
 
-## Update code change t inflict in vps
+## Update code change to inflict in vps
 cd /var/www/CeoAgent
 git status
 git pull
@@ -16,6 +16,13 @@ npm ci
 npm run build
 sudo systemctl restart ceoagent
 sudo systemctl status ceoagent --no-pager
+
+
+
+## restart backend server
+sudo systemctl restart ceoagent
+sudo systemctl status ceoagent --no-pager
+
 
 
 -----------------------------------------------------------------------------------

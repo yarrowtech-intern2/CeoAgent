@@ -22,9 +22,9 @@
     { id: "ceo", label: "CEO" },
   ];
   const GAMES = [
-    { id: "ttt", title: "Tic-Tac-Toe", blurb: "Three in a row. Quick and ruthless.", shape: 2 },
-    { id: "c4", title: "Connect Four", blurb: "Drop discs, plan ahead, connect four.", shape: 0 },
-    { id: "rps", title: "Rock Paper Scissors", blurb: "First to 3. The CEO studies your habits.", shape: 1 },
+    { id: "ttt", title: "Tic-Tac-Toe", blurb: "Three in a row. Quick and ruthless." },
+    { id: "c4", title: "Connect Four", blurb: "Drop discs, plan ahead, connect four." },
+    { id: "rps", title: "Rock Paper Scissors", blurb: "First to 3. The CEO studies your habits." },
   ];
 
   const LINES = {
@@ -455,9 +455,8 @@
     if (id === "ttt") startTtt();
     else if (id === "c4") startC4();
     else if (id === "rps") startRps();
-    const meta = GAMES.find((x) => x.id === id);
-    bot()?.setShape?.(meta.shape);
     botMood("idle");
+    bot()?.react?.("curious", 1200);
   }
 
   function toMenu() {
