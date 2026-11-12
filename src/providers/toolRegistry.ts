@@ -21,6 +21,7 @@ import { IMAGE_GEN_TOOL_DEFS, isImageGenAvailable } from "../tools/image-gen.js"
 import { VIDEO_GEN_TOOL_DEFS, isHiggsfieldConfigured } from "../tools/higgsfield.js";
 import { POST_IMAGES_TOOL_DEFS } from "../tools/post-images.js";
 import { REDDIT_TOOL_DEFS, isRedditConnected } from "../tools/reddit.js";
+import { remoteToolGroups } from "../tools/remoteMcp.js";
 import { documentToolDefs } from "../agents.js";
 
 /**
@@ -77,6 +78,7 @@ export function buildToolDefRegistry(): Map<string, ToolDef> {
     ...(isHiggsfieldConfigured() ? [{ server: "video_gen", defs: VIDEO_GEN_TOOL_DEFS }] : []),
     ...(isZernioConnected() ? [{ server: "post_images", defs: POST_IMAGES_TOOL_DEFS }] : []),
     ...(isRedditConnected() ? [{ server: "reddit", defs: REDDIT_TOOL_DEFS }] : []),
+    ...remoteToolGroups(),
   ];
 
   const registry = new Map<string, ToolDef>();

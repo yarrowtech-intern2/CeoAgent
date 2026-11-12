@@ -11,6 +11,7 @@ import {
 } from "./exhaustionClassifier.js";
 import { parseSessionId, type FallbackProviderName } from "./sessionStore.js";
 import { isAgentShellAllowed } from "../agentSandbox.js";
+import { refreshRemoteTools } from "../tools/remoteMcp.js";
 
 export type ProviderName = "claude" | FallbackProviderName;
 /** "auto" = today's cascade behavior; anything else is a manual, no-fallback pin to that one provider. */
@@ -83,6 +84,10 @@ interface RunWithFallbackOpts {
  * different model than the one chosen.
  */
 async function runWithFallback(opts: RunWithFallbackOpts): Promise<FallbackRunResult> {
+  // Every provider path builds its tool list synchronously, so the connected
+  // remote (MCP) systems' tools are discovered once here, before any of them.
+  await refreshRemoteTools();
+
   if (opts.forcedProvider) {
     if (!isConfigured(opts.forcedProvider)) {
       if (opts.forcedProvider === "codex") {

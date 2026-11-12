@@ -1,5 +1,6 @@
 import "dotenv/config";
 import express from "express";
+import { z } from "zod";
 import helmet from "helmet";
 import { rateLimit } from "express-rate-limit";
 import multer from "multer";
@@ -124,6 +125,7 @@ import { isZernioConnected } from "../tools/zernio.js";
 import { isPostizConnected } from "../tools/postiz.js";
 import { isScrapegraphConnected } from "../tools/scrapegraph.js";
 import { isHunterConnected } from "../tools/hunter.js";
+import { saveConnection, deleteConnection, describeConnections, testConnection, refreshRemoteTools } from "../tools/remoteMcp.js";
 import {
   getCanvaAuthUrl,
   handleCanvaCallback,
@@ -260,6 +262,7 @@ app.get(["/", "/index.html"], async (req, res, next) => {
   next();
 });
 app.use(express.static(join(__dirname, "public")));
+
 
 // Loopback-only, bearer-token-authenticated — not a Supabase-auth'd /api
 // route. This is how the locally-spawned `codex` CLI subprocess (see
@@ -1384,6 +1387,34 @@ app.get("/api/documents/:id/download", async (req, res) => {
   res.status(400).json({ error: "unsupported format" });
 });
 
+// --- Websites: building happens in a separate project. The sidebar's
+// Websites item opens this route in a new tab, and it redirects to that
+// project's address (WEBSITE_BUILDER_URL from Settings or .env), so the
+// address can change without a release. Only http(s) targets are allowed. ---
+
+app.get("/api/website-builder", (_req, res) => {
+  const raw = getEnvValue("WEBSITE_BUILDER_URL")?.trim();
+  let target: URL | null = null;
+  try {
+    target = raw ? new URL(raw) : null;
+  } catch {
+    target = null;
+  }
+  if (target && (target.protocol === "https:" || target.protocol === "http:")) {
+    res.redirect(302, target.toString());
+    return;
+  }
+  res
+    .status(503)
+    .type("html")
+    .send(
+      `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Website builder</title>` +
+        `<body style="font:15px/1.5 system-ui,sans-serif;max-width:520px;margin:15vh auto;padding:0 16px;color:#26263a">` +
+        `<h1 style="font-size:20px">The website builder isn't linked yet</h1>` +
+        `<p>An administrator needs to set <strong>Website builder URL</strong> in CEO Agent's Settings (or <code>WEBSITE_BUILDER_URL</code> in <code>.env</code>).</p></body>`,
+    );
+});
+
 // --- Files: the human-facing folder browser (data/, deliverables/,
 // workspace/) — separate from the /api/documents deliverable feed above. ---
 
@@ -1399,6 +1430,64 @@ app.get("/api/settings", (_req, res) => {
 
 app.post("/api/settings", (req, res) => {
   res.json(updateSettings(req.body ?? {}));
+});
+
+// --- Remote MCP connections: external systems (the ERPs) whose read-only
+// data tools agents can call. One entry per system, per organization; the
+// key is write-only here, like Settings — responses carry a mask, never it.
+// See tools/remoteMcp.ts. ---
+
+const remoteMcpBody = z.object({
+  name: z.string().trim().min(1).max(40),
+  url: z.string().trim().min(1).max(500),
+  key: z.string().max(500).optional(),
+  headerName: z.union([z.string().trim().regex(/^[A-Za-z][A-Za-z0-9-]{0,63}$/, "must be a valid header name"), z.literal("")]).optional(),
+  agents: z.array(z.string()).max(20).optional(),
+});
+
+app.get("/api/remote-mcp", async (_req, res) => {
+  // Statuses come from the discovery cache; give a cold one a moment to fill
+  // in without making the page wait on a slow or unreachable server.
+  await refreshRemoteTools({ maxWaitMs: 3000 });
+  res.json(describeConnections());
+});
+
+app.post("/api/remote-mcp", async (req, res) => {
+  const parsed = remoteMcpBody.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") });
+    return;
+  }
+  const unknownAgent = parsed.data.agents?.find((a) => !AGENT_KEYS.has(a));
+  if (unknownAgent) {
+    res.status(400).json({ error: `Unknown agent: ${unknownAgent}` });
+    return;
+  }
+  try {
+    const conn = await saveConnection(parsed.data);
+    // Saved either way; the result says whether it could actually connect, so a
+    // wrong key shows up now rather than at the first agent run.
+    res.json(await testConnection(conn.id));
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post("/api/remote-mcp/:id/test", async (req, res) => {
+  const status = await testConnection(req.params.id);
+  if (!status) {
+    res.status(404).json({ error: "No such connection." });
+    return;
+  }
+  res.json(status);
+});
+
+app.delete("/api/remote-mcp/:id", (req, res) => {
+  if (!deleteConnection(req.params.id)) {
+    res.status(404).json({ error: "No such connection." });
+    return;
+  }
+  res.json({ ok: true });
 });
 
 // --- Account connections ---

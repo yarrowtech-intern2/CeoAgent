@@ -478,6 +478,25 @@ curl -i -X POST https://ceo.example.com/api/automation/runs \
   -d '{"goal":"Say hello and stop."}'
 ```
 
+## Connected systems (ERPs over MCP)
+
+Each organization can connect external systems whose data agents may read.
+Open **Accounts → Connected systems → Add system** and enter the system's
+MCP URL (`https://erp.example.com/mcp`) and its data access key. The key is
+stored per organization on the server and never shown again.
+
+- The system must speak MCP over Streamable HTTP and mark its read tools
+  `readOnlyHint: true`. Only those tools are exposed; anything else is counted
+  as "hidden" and can never be called.
+- The URL must be `https://` and resolve to a public address. To reach a
+  system on a private network or the same host, an operator can set
+  `REMOTE_MCP_ALLOW_PRIVATE=true` in `/etc/ceo-agent-os.env`, which also allows
+  `http://`. This is a server-wide switch, not a per-organization one.
+- By default the Analysis, Finance, CRM and Sales agents get the tools.
+- Tool lists are re-read at the start of a run (cached for 5 minutes, or 60
+  seconds after a failure), so adding or changing tools on the ERP needs no
+  restart here.
+
 ## 12. Updating The Deployment
 
 For Git-based deployments:

@@ -17,6 +17,7 @@ import { videoGenServer, VIDEO_GEN_TOOLS, isHiggsfieldConfigured } from "./tools
 import { postImagesServer, POST_IMAGES_TOOLS } from "./tools/post-images.js";
 import { schedulerServer } from "./tools/scheduler.js";
 import { redditServer, REDDIT_TOOLS, isRedditConnected } from "./tools/reddit.js";
+import { remoteMcpServers } from "./tools/remoteMcp.js";
 import { crmServer } from "./tools/crm.js";
 import { playbookServer } from "./tools/playbook.js";
 import { portfolioServer } from "./tools/portfolio.js";
@@ -80,6 +81,8 @@ ${rosterDescription()}
 9. When a specialist reports having sent, posted, or messaged something, only relay that as confirmed if their report cites a concrete identifier (a message ID, post ID) — a report of success with no identifier is not confirmed, and you must say so plainly (e.g. "reported as sent, but I can't confirm — no message ID came back") rather than repeating the claim as fact. This app has a known issue where a delegated specialist's tool result can go missing in transit, causing it to report success it never actually verified.
 10. If a delegated specialist's tool calls come back completely empty ("completed with no output") for more than one call in a row — especially if any of those calls needed no external service at all (e.g. a local list/read tool, not just an integration like Gmail) — that pattern is rule 9's known result-loss bug, not a real integration failure. In that case: do NOT conclude the integration/credentials are broken, do NOT tell the user to disconnect/reconnect an account that was working before, and do NOT keep retrying via delegation. Instead call the same tool(s) yourself directly — you have the same MCP tools the specialist does, and your own direct calls aren't subject to this bug. Only report a real blocker (and only then suggest reconnecting) if your own direct call fails with an actual error message, not just empty output.
 
+11. Building or designing a website is not done here — it lives in a separate Website Builder product, which the user opens from the "Websites" item in the sidebar. If asked to build, design or redesign a website, say so and point them there instead of delegating it (not even to Developer). Website-related analysis, like SEO/AEO reports or copy for a page, is still fine to delegate as usual.
+
 Be decisive. Do not ask clarifying questions unless the goal is genuinely ambiguous about scope or priority.
 
 ${DEVELOPER_INFO_BLOCK}`;
@@ -109,6 +112,7 @@ function buildMcpServers() {
     ...(isHiggsfieldConfigured() ? { video_gen: videoGenServer } : {}),
     ...(isZernioConnected() ? { post_images: postImagesServer } : {}),
     ...(isRedditConnected() ? { reddit: redditServer } : {}),
+    ...remoteMcpServers(),
   };
 }
 

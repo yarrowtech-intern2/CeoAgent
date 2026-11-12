@@ -77,6 +77,7 @@ const FIELDS: FieldMeta[] = [
   { envVar: "AUTOMATION_API_KEY", label: "Automation API key", group: "Automation" },
   { envVar: "WEBHOOK_URL", label: "Webhook URL", group: "Automation" },
   { envVar: "N8N_WORKFLOWS", label: "n8n workflows (JSON)", group: "Automation" },
+  { envVar: "WEBSITE_BUILDER_URL", label: "Website builder URL — where the Websites menu item sends users (https://…)", group: "Website Builder" },
   { envVar: "ANALYTICS_SOURCE_URL", label: "Project URL (e.g. https://xxxx.supabase.co)", group: "Analytics Source" },
   { envVar: "ANALYTICS_SOURCE_SERVICE_KEY", label: "Service role key (Project Settings → API — keep secret)", group: "Analytics Source" },
   { envVar: "ANALYTICS_SOURCE_TABLE", label: "Events table name (default: analytics_events)", group: "Analytics Source" },
@@ -136,6 +137,9 @@ const SHARED_WITH_ORGS = new Set([
   // (resolved as a pair — see getCredentialSet).
   "HIGGSFIELD_API_KEY_ID", "HIGGSFIELD_API_KEY_SECRET",
   "HIGGSFIELD_IMAGE_MODEL", "HIGGSFIELD_VIDEO_MODEL", "HIGGSFIELD_IMAGE_TO_VIDEO_MODEL",
+  // Where the sidebar's Websites item sends users — one address for every
+  // org by default, overridable per org in Settings.
+  "WEBSITE_BUILDER_URL",
 ]);
 const FIELD_NAMES = new Set(FIELDS.map((f) => f.envVar));
 

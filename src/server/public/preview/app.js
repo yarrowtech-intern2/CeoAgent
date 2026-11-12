@@ -15,6 +15,10 @@ const NAV_ITEMS = [
   { key: "crm", label: "CRM", icon: "handshake", reicon: "handshake" },
   { key: "playbook", label: "Playbook", icon: "calendar-days", reicon: "book" },
   { key: "portfolio", label: "Portfolio", icon: "folder-open", reicon: "briefcase" },
+  // Website building lives in a separate project; the server redirects there
+  // (WEBSITE_BUILDER_URL, set in Settings or .env). `href` items open in a
+  // new tab instead of switching views.
+  { key: "websites", label: "Websites", icon: "globe", reicon: "globe", href: "/api/website-builder" },
   { key: "scheduler", label: "Calendar", icon: "calendar", reicon: "calendar" },
   { key: "knowledge", label: "Knowledge", icon: "brain", reicon: "lamp-on" },
   { key: "documents", label: "Documents", icon: "file-text", reicon: "document" },
@@ -167,6 +171,94 @@ const QUICK_TOOLS = [
 const NOTIF_SEEN_KEY = "ceoagent_preview_notif_last_seen";
 const THEME_KEY = "theme"; // same key the main app uses, so theme choice is shared across both pages
 const POLL_MS = 10000;
+
+// ---------- Home bot style (Settings → Home bot) ----------
+// Two interchangeable bot engines with the same API:
+//   "classic" → window.GeometricBot (geometric-bot.js, 2D canvas orb)
+//   "led"     → window.LedBot      (led-bot.js, 3D LED-dome; ES module, so
+//               it arrives after this script — see the "ledbot-ready" hook)
+// The choice and the LED bot's tuning are per-browser, like the theme.
+const BOT_STYLE_KEY = "ceo.botStyle";
+const LED_CONFIG_KEY = "ceo.ledBot.config"; // only the values that differ from LedBot.DEFAULT_CONFIG
+
+// LED Dome is the default; "classic" only when picked in Settings, or when
+// the browser can't do WebGL.
+function getBotStyle() {
+  if (window.LedBot && !window.LedBot.isSupported()) return "classic";
+  try {
+    return localStorage.getItem(BOT_STYLE_KEY) === "classic" ? "classic" : "led";
+  } catch {
+    return "led";
+  }
+}
+
+function setBotStyle(style) {
+  try {
+    localStorage.setItem(BOT_STYLE_KEY, style === "led" ? "led" : "classic");
+  } catch {
+    /* storage blocked — the choice just won't survive a reload */
+  }
+}
+
+function loadLedConfig() {
+  try {
+    const v = JSON.parse(localStorage.getItem(LED_CONFIG_KEY) || "{}");
+    return v && typeof v === "object" ? v : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveLedConfig(fullConfig) {
+  const defaults = window.LedBot?.DEFAULT_CONFIG || {};
+  const diff = {};
+  for (const k of Object.keys(defaults)) {
+    if (JSON.stringify(fullConfig[k]) !== JSON.stringify(defaults[k])) diff[k] = fullConfig[k];
+  }
+  try {
+    localStorage.setItem(LED_CONFIG_KEY, JSON.stringify(diff));
+  } catch {
+    /* ignore */
+  }
+}
+
+function ledBotAvailable() {
+  return !!window.LedBot && window.LedBot.isSupported();
+}
+
+// The engine that's actually driving the home bot right now.
+function activeBotEngine() {
+  if (getBotStyle() === "led" && ledBotAvailable()) return window.LedBot;
+  return window.GeometricBot;
+}
+
+// Mounts the chosen bot into `slot`, tearing down the other engine so two
+// bots never fight over the shared accent colour / mode events.
+function mountBot(slot) {
+  if (!slot) return;
+  if (getBotStyle() === "led") {
+    if (!window.LedBot) return; // module still loading; "ledbot-ready" remounts
+    if (window.LedBot.isSupported()) {
+      const classic = window.GeometricBot?.getInstance?.();
+      if (classic && !classic.destroyed) classic.destroy();
+      window.LedBot.mount(slot, {
+        config: loadLedConfig(),
+        // Speech bubble: jokes/greetings live in led-bot.js; app hints go here.
+        speech: {
+          tips: ["You can change my style from Settings. Try it!", "Psst… I come in two styles. Switch me in Settings!"],
+          onTipClick: () => switchView("settings"),
+        },
+      });
+      return;
+    }
+  }
+  window.LedBot?.unmount?.();
+  window.GeometricBot?.mount(slot);
+}
+
+function mountBotSlots() {
+  mountBot(document.getElementById("metallic-bot-slot") || document.getElementById("settings-bot-preview"));
+}
 
 // Orbit cards that map cleanly onto one real department, routed direct to
 // that department (bypassing CEO delegation). Execute/Improve stay routed
@@ -651,6 +743,10 @@ function reicon(name, size = 18, weight = "outline") {
 
 function render() {
   const app = document.getElementById("app");
+  if (state.botTuneBusy) {
+    state.renderDeferred = true; // re-run once the Settings slider is released
+    return;
+  }
 
   // render() also fires from the background poll and the clock tick, so a
   // full innerHTML swap would otherwise drop focus/cursor from whatever input
@@ -792,8 +888,15 @@ function renderSidebar() {
         </button>
       </div>
       <nav class="sidebar-nav">
-        ${NAV_ITEMS.map(
-          (item) => `
+        ${NAV_ITEMS.map((item) =>
+          item.href
+            ? `
+          <a class="sidebar-nav-link" href="${escapeHtml(item.href)}" target="_blank" rel="noopener" title="${escapeHtml(item.label)} (opens in a new tab)">
+            ${reicon(item.reicon || item.icon, 18)}<span>${item.label}</span>
+            <span class="sidebar-nav-external" aria-hidden="true">${icon("external-link")}</span>
+          </a>
+        `
+            : `
           <button type="button" class="sidebar-nav-link${state.view === item.key ? " active" : ""}" data-nav="${item.key}" title="${escapeHtml(item.label)}">
             ${reicon(item.reicon || item.icon, 18)}<span>${item.label}</span>
           </button>
@@ -1177,31 +1280,11 @@ function renderActivityLogList(todays) {
   `;
 }
 
-// Features 1 & 4: Central 3D Bot with Ambient Halo and Mode Selector Pill
+// Central bot (Classic orb or LED Dome, see mountBot) with its ambient halo.
 function renderHomeBotFace() {
-  const currentMode = window.GeometricBot?.getCurrentMode?.();
-  const activeIdx = currentMode ? currentMode.index : 0;
   return `
     <div class="bot-ambient-halo" id="bot-ambient-halo" aria-hidden="true"></div>
-    <div class="metallic-bot-container geometric-bot-container" id="metallic-bot-slot" aria-label="CEO Agent 3D Expressive Bot"></div>
-    <div class="bot-mode-selector" id="bot-mode-selector" role="tablist" aria-label="Co-Founder Mood & State">
-      <button type="button" class="bot-mode-btn ${activeIdx === 0 ? "active" : ""}" data-bot-mode="0" title="Ready & Friendly (Orange)">
-        <span class="mode-dot dot-ready"></span>
-        <span class="mode-label">Ready</span>
-      </button>
-      <button type="button" class="bot-mode-btn ${activeIdx === 1 ? "active" : ""}" data-bot-mode="1" title="Thinking & Working (Blue)">
-        <span class="mode-dot dot-thinking"></span>
-        <span class="mode-label">Thinking</span>
-      </button>
-      <button type="button" class="bot-mode-btn ${activeIdx === 2 ? "active" : ""}" data-bot-mode="2" title="Goal Done & Celebrating (Purple)">
-        <span class="mode-dot dot-celebrate"></span>
-        <span class="mode-label">Celebrate</span>
-      </button>
-      <button type="button" class="bot-mode-btn ${activeIdx === 3 ? "active" : ""}" data-bot-mode="3" title="Attention & Review (Yellow)">
-        <span class="mode-dot dot-review"></span>
-        <span class="mode-label">Review</span>
-      </button>
-    </div>
+    <div class="metallic-bot-container geometric-bot-container" id="metallic-bot-slot" aria-label="CEO Agent bot"></div>
   `;
 }
 
@@ -2472,9 +2555,147 @@ async function loadExternalDashboard(range) {
   render();
 }
 
+// ---------- Settings → Home bot ----------
+
+function renderBotTuneRow([key, label, a, b, c], cfg) {
+  const v = cfg[key];
+  const id = `led-cfg-${key}`;
+  const head = `<label for="${id}">${escapeHtml(label)}</label>`;
+  if (a === "color") return `<div class="bot-tune-row">${head}<input id="${id}" type="color" data-led-key="${key}" value="${escapeHtml(v)}"><output></output></div>`;
+  if (a === "toggle") return `<div class="bot-tune-row">${head}<input id="${id}" type="checkbox" data-led-key="${key}" ${v ? "checked" : ""}><output></output></div>`;
+  if (a === "select") {
+    const opts = b.map(([val, l]) => `<option value="${escapeHtml(val)}" ${val === v ? "selected" : ""}>${escapeHtml(l)}</option>`).join("");
+    return `<div class="bot-tune-row">${head}<select id="${id}" data-led-key="${key}">${opts}</select><output></output></div>`;
+  }
+  const shown = Number.isInteger(v) ? v : Number(v).toFixed(2);
+  return `<div class="bot-tune-row">${head}<input id="${id}" type="range" data-led-key="${key}" min="${a}" max="${b}" step="${c}" value="${v}"><output>${shown}</output></div>`;
+}
+
+function renderBotTuning() {
+  if (!window.LedBot) return `<p class="bot-settings-hint">Loading the LED Dome bot…</p>`;
+  const cfg = { ...window.LedBot.DEFAULT_CONFIG, ...loadLedConfig() };
+  const open = state.botTuneOpen || {};
+  const modeNames = ["Ready", "Thinking", "Celebrate", "Review"];
+  return `
+    <div class="bot-tune" id="bot-tune">
+      <details class="bot-tune-group" data-group="colors" ${open.colors !== false ? "open" : ""}>
+        <summary>Mode colours</summary>
+        <div class="bot-tune-colors">
+          ${modeNames.map((n, i) => `<label>${n}<input type="color" data-led-mode="${i}" value="${escapeHtml(cfg.modeColors[i])}"></label>`).join("")}
+        </div>
+      </details>
+      ${window.LedBot.CONFIG_SCHEMA.map(
+        ([title, rows]) => `
+        <details class="bot-tune-group" data-group="${escapeHtml(title)}" ${open[title] ? "open" : ""}>
+          <summary>${escapeHtml(title)}</summary>
+          <div class="bot-tune-rows">${rows.map((r) => renderBotTuneRow(r, cfg)).join("")}</div>
+        </details>`,
+      ).join("")}
+      <div class="bot-tune-actions">
+        <button type="button" class="btn-secondary" id="bot-tune-reset">Reset to defaults</button>
+        <a class="bot-tune-lab" href="/preview/bot-lab.html" target="_blank" rel="noopener">Open Bot Lab ↗</a>
+      </div>
+    </div>`;
+}
+
+function renderBotSettingsCard() {
+  const style = getBotStyle();
+  const ledOk = !window.LedBot || window.LedBot.isSupported();
+  const option = (key, title, desc, disabled) => `
+    <button type="button" role="radio" aria-checked="${style === key}" class="bot-style-option${style === key ? " active" : ""}" data-bot-style="${key}" ${disabled ? "disabled" : ""}>
+      <span class="bot-style-radio" aria-hidden="true"></span>
+      <span class="bot-style-text"><strong>${title}</strong><span>${desc}</span></span>
+    </button>`;
+  return `
+    <div class="tasks-list-card settings-group bot-settings-card">
+      <div class="tasks-toolbar">
+        <span class="tasks-stat-chip-label" style="font-weight:700;color:var(--text);font-size:13px">Home bot</span>
+        <span class="task-agent-badge" style="--badge-color:var(--accent);margin-left:auto">${style === "led" ? "LED Dome" : "Classic orb"}</span>
+      </div>
+      <div class="bot-settings-body">
+        <div class="bot-settings-preview">
+          <div class="bot-ambient-halo" aria-hidden="true"></div>
+          <div class="bot-settings-slot" id="settings-bot-preview"></div>
+        </div>
+        <div class="bot-settings-side">
+          <p class="bot-settings-hint">Choose the bot in the centre of Home. Saved in this browser.</p>
+          <div class="bot-style-options" role="radiogroup" aria-label="Home bot style">
+            ${option("classic", "Classic orb", "Soft glowing orb with a drawn face", false)}
+            ${option("led", "LED Dome", ledOk ? "3D glass dome with an LED-matrix face" : "Needs WebGL, which this browser doesn't provide", !ledOk)}
+          </div>
+          ${style === "led" ? renderBotTuning() : ""}
+        </div>
+      </div>
+    </div>`;
+}
+
+// While a tuning slider is being dragged, hold off full re-renders (the
+// background poll would otherwise rebuild the slider out from under the pointer).
+function endBotTuneDrag() {
+  state.botTuneBusy = false;
+  if (state.renderDeferred) {
+    state.renderDeferred = false;
+    render();
+  }
+}
+
+function attachBotSettingsHandlers() {
+  document.querySelectorAll("[data-bot-style]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const style = btn.dataset.botStyle;
+      if (style === getBotStyle()) return;
+      setBotStyle(style);
+      render();
+      showToast(style === "led" ? "Home bot set to LED Dome" : "Home bot set to Classic orb");
+    });
+  });
+
+  const tune = document.getElementById("bot-tune");
+  if (!tune || !window.LedBot) return;
+  tune.addEventListener("pointerdown", () => {
+    state.botTuneBusy = true;
+    window.addEventListener("pointerup", endBotTuneDrag, { once: true });
+    window.addEventListener("pointercancel", endBotTuneDrag, { once: true });
+  });
+  tune.addEventListener("input", (e) => {
+    const el = e.target;
+    const cfg = { ...window.LedBot.DEFAULT_CONFIG, ...loadLedConfig() };
+    let patch;
+    if (el.dataset.ledMode !== undefined) {
+      const colors = [...cfg.modeColors];
+      colors[Number(el.dataset.ledMode)] = el.value;
+      patch = { modeColors: colors };
+    } else if (el.dataset.ledKey) {
+      const v = el.type === "checkbox" ? el.checked : el.type === "range" ? Number(el.value) : el.value;
+      patch = { [el.dataset.ledKey]: v };
+      const out = el.parentElement.querySelector("output");
+      if (out && el.type === "range") out.textContent = Number.isInteger(v) ? v : v.toFixed(2);
+    } else {
+      return;
+    }
+    window.LedBot.getInstance()?.setConfig(patch);
+    saveLedConfig({ ...cfg, ...patch });
+  });
+  tune.querySelectorAll("details[data-group]").forEach((d) => {
+    d.addEventListener("toggle", () => {
+      state.botTuneOpen = { ...(state.botTuneOpen || {}), [d.dataset.group]: d.open };
+    });
+  });
+  document.getElementById("bot-tune-reset")?.addEventListener("click", () => {
+    try {
+      localStorage.removeItem(LED_CONFIG_KEY);
+    } catch {
+      /* ignore */
+    }
+    window.LedBot.getInstance()?.setConfig(JSON.parse(JSON.stringify(window.LedBot.DEFAULT_CONFIG)));
+    render();
+    showToast("LED Dome reset to defaults");
+  });
+}
+
 function renderSettingsPage() {
-  if (state.settingsLoading && !state.settingsFields) return `<div class="stub-placeholder">Loading settings…</div>`;
-  if (state.settingsError) return `<div class="stub-placeholder">Couldn't load settings: ${escapeHtml(state.settingsError)}</div>`;
+  if (state.settingsLoading && !state.settingsFields) return `${renderBotSettingsCard()}<div class="stub-placeholder">Loading settings…</div>`;
+  if (state.settingsError) return `${renderBotSettingsCard()}<div class="stub-placeholder">Couldn't load settings: ${escapeHtml(state.settingsError)}</div>`;
   const fields = state.settingsFields || [];
   const groups = [];
   for (const f of fields) {
@@ -2502,6 +2723,7 @@ function renderSettingsPage() {
         <button type="button" class="btn-primary" id="settings-save-btn" ${state.settingsSaving ? "disabled" : ""}>${state.settingsSaving ? "Saving…" : "Save changes"}</button>
       </div>
       <div style="display:flex;flex-direction:column;gap:18px">
+        ${renderBotSettingsCard()}
         ${groups
           .map(
             (g) => `
@@ -3711,11 +3933,8 @@ function initFlurryBotInteraction() {
 }
 
 function attachHandlers() {
-  const botEngine = window.GeometricBot || window.MetallicBot || window.FluffyBot;
-  if (botEngine) {
-    const slot = document.getElementById("metallic-bot-slot") || document.getElementById("fluffy-bot-slot");
-    if (slot) botEngine.mount(slot);
-  }
+  mountBotSlots();
+  attachBotSettingsHandlers();
   if (window.Orbit3D) {
     window.Orbit3D.sync();
   }
@@ -4275,9 +4494,7 @@ function attachHandlers() {
       if (!dec) return;
 
       // 1. Bot celebration jump
-      if (window.GeometricBot) {
-        window.GeometricBot.celebrate();
-      }
+      activeBotEngine()?.celebrate();
 
       // 2. Trajectory handoff beam to target orbit capability node
       launchHandoffBeam("#metallic-bot-slot", dec.targetOrbitNode);
@@ -4310,16 +4527,6 @@ function attachHandlers() {
         dec.status = "dismissed";
         showToast("Decision dismissed.");
         render();
-      }
-    });
-  });
-
-  // Features 1 & 4: Co-Founder Working Mode Selector Pills
-  document.querySelectorAll("[data-bot-mode]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const modeIdx = Number(btn.dataset.botMode);
-      if (window.GeometricBot) {
-        window.GeometricBot.setShape(modeIdx);
       }
     });
   });
@@ -4367,25 +4574,18 @@ function attachGlobalKeyboardShortcut() {
   });
 }
 
-// Feature 1 & 4: Sync mode selector button active state when bot changes mode
-function attachBotModeListener() {
-  window.addEventListener("ceo-bot-mode-change", (e) => {
-    const detail = e.detail;
-    if (!detail) return;
-    document.querySelectorAll("[data-bot-mode]").forEach((btn) => {
-      const idx = Number(btn.dataset.botMode);
-      if (idx === detail.index) btn.classList.add("active");
-      else btn.classList.remove("active");
-    });
-  });
-}
-
 // ---------- init ----------
 
 initTheme();
 attachOutsideClickHandler();
 attachGlobalKeyboardShortcut();
-attachBotModeListener();
+// led-bot.js is an ES module, so it finishes loading after this script has
+// already rendered once; mount it (or fill in its Settings controls) then.
+window.addEventListener("ledbot-ready", () => {
+  if (getBotStyle() !== "led" && state.view !== "settings") return;
+  if (!state.loading) render();
+  else mountBotSlots();
+});
 loadAll();
 setInterval(() => loadAll(true), POLL_MS);
 setInterval(() => {
