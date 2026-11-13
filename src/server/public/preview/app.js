@@ -18,7 +18,7 @@ const NAV_ITEMS = [
   // Website building lives in a separate project; the server redirects there
   // (WEBSITE_BUILDER_URL, set in Settings or .env). `href` items open in a
   // new tab instead of switching views.
-  { key: "websites", label: "Websites", icon: "globe", reicon: "globe", href: "/api/website-builder" },
+  { key: "websites", label: "Make sites", icon: "globe", reicon: "globe", href: "/api/website-builder" },
   { key: "scheduler", label: "Calendar", icon: "calendar", reicon: "calendar" },
   { key: "knowledge", label: "Knowledge", icon: "brain", reicon: "lamp-on" },
   { key: "documents", label: "Documents", icon: "file-text", reicon: "document" },
