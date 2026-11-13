@@ -16,7 +16,7 @@ const NAV_ITEMS = [
   { key: "playbook", label: "Playbook", icon: "calendar-days", reicon: "book" },
   { key: "portfolio", label: "Portfolio", icon: "folder-open", reicon: "briefcase" },
   // Website building lives in a separate project; the server redirects there
-  // (WEBSITE_BUILDER_URL, set in Settings or .env). `href` items open in a
+  // (fixed address, see /api/website-builder). `href` items open in a
   // new tab instead of switching views.
   { key: "websites", label: "Make sites", icon: "globe", reicon: "globe", href: "/api/website-builder" },
   { key: "scheduler", label: "Calendar", icon: "calendar", reicon: "calendar" },

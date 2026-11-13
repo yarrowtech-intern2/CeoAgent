@@ -1388,31 +1388,13 @@ app.get("/api/documents/:id/download", async (req, res) => {
 });
 
 // --- Websites: building happens in a separate project. The sidebar's
-// Websites item opens this route in a new tab, and it redirects to that
-// project's address (WEBSITE_BUILDER_URL from Settings or .env), so the
-// address can change without a release. Only http(s) targets are allowed. ---
+// Websites item opens this route in a new tab, and it redirects there.
+// Fixed address — not configurable per-deployment via Settings/.env. ---
+
+const WEBSITE_BUILDER_URL = "https://webagent-16ul.onrender.com";
 
 app.get("/api/website-builder", (_req, res) => {
-  const raw = getEnvValue("WEBSITE_BUILDER_URL")?.trim();
-  let target: URL | null = null;
-  try {
-    target = raw ? new URL(raw) : null;
-  } catch {
-    target = null;
-  }
-  if (target && (target.protocol === "https:" || target.protocol === "http:")) {
-    res.redirect(302, target.toString());
-    return;
-  }
-  res
-    .status(503)
-    .type("html")
-    .send(
-      `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Website builder</title>` +
-        `<body style="font:15px/1.5 system-ui,sans-serif;max-width:520px;margin:15vh auto;padding:0 16px;color:#26263a">` +
-        `<h1 style="font-size:20px">The website builder isn't linked yet</h1>` +
-        `<p>An administrator needs to set <strong>Website builder URL</strong> in CEO Agent's Settings (or <code>WEBSITE_BUILDER_URL</code> in <code>.env</code>).</p></body>`,
-    );
+  res.redirect(302, WEBSITE_BUILDER_URL);
 });
 
 // --- Files: the human-facing folder browser (data/, deliverables/,
